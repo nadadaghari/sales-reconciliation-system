@@ -1,0 +1,39 @@
+{% extends "salesapp/base.html" %}
+{% load static %}
+{% block content %}
+<div style="min-height:80vh; display:flex; align-items:center; justify-content:center; width:100vw; position:relative; left:50%; transform:translateX(-50%);">
+  <div style="max-width:420px; width:100%; background:#fff; border-radius:24px; padding:40px 36px; box-shadow:0 10px 40px rgba(0,0,0,0.08); text-align:center;">
+    <img src="{% static 'salesapp/logo.png' %}" alt="Logo" style="width:90px; height:auto; margin-bottom:18px;">
+    <h2 style="margin:0 0 6px; font-size:24px; font-weight:800; color:#1C1917;">Branch Login</h2>
+    <p style="margin:0 0 28px; color:#8A8578; font-size:14px;">Enter your branch details to continue</p>
+
+    <form method="post" style="text-align:left;">
+      {% csrf_token %}
+      <div style="margin-bottom:18px;">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Branch Code
+        </label>
+        <input name="branch_code" required autofocus placeholder="e.g. AKL" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:12px 18px;">
+      </div>
+      <div style="margin-bottom:22px;">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Password
+        </label>
+        <input name="password" type="password" required placeholder="Your branch password" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:12px 18px;">
+      </div>
+
+      <button type="submit" style="width:100%; background:#D4A843; color:#1C1917; border:none; border-radius:24px; padding:14px; font-weight:700; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+        Login
+      </button>
+    </form>
+
+    <p style="margin:22px 0 0; font-size:12px; color:#B8B4AA;">Secure access for authorized personnel only</p>
+    <div style="margin-top:14px; text-align:center;">
+      <a href="{% url 'staff_login' %}" style="font-size:13px; color:#8A8578;">Collector / Audit / Admin login</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

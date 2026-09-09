@@ -1,0 +1,220 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+{% if submitted_ref %}
+<div style="min-height:75vh; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; text-align:center;">
+  <div style="font-size:20px; color:#8A8578; margin-bottom:14px; letter-spacing:0.5px;">SUBMIT REQUEST NO.</div>
+  <div style="font-size:72px; font-weight:800; color:#1F3B4D; letter-spacing:1px; line-height:1.1;">{{ submitted_ref }}</div>
+  <div style="margin-top:22px; font-size:16px; color:#2E7D5B; font-weight:600;">Submitted Successfully — write this number on the cash envelope</div>
+</div>
+{% else %}
+
+{% if locked_branch %}
+<div class="success-banner" style="background:#F0EEE7; color:#1F3B4D;">
+  Welcome, <strong>{{ head_cashier_name|default:"Waiter" }}</strong> — {{ locked_branch.name }}
+</div>
+{% endif %}
+
+<form method="post" id="entryForm" enctype="multipart/form-data">
+  {% csrf_token %}
+
+  <div class="card">
+    <h3>Shift Details</h3>
+    <div class="grid grid-4">
+      <div><label>Branch</label>
+        {% if locked_branch %}
+          <input value="{{ locked_branch.name }}" disabled>
+        {% else %}
+          <input name="branch" placeholder="e.g. Al Khoyli" required>
+        {% endif %}
+      </div>
+      <div><label>Date</label>
+        {% if today %}
+          <input value="{{ today|date:'Y-m-d' }}" disabled>
+        {% else %}
+          <input name="date" type="date" required>
+        {% endif %}
+      </div>
+      <div><label>Shift</label>
+        <select name="shift">
+          {% for value, label in shift_choices %}
+            <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div><label>Accountant Name</label>
+        {% if head_cashier_name %}
+          <input value="{{ head_cashier_name }}" disabled>
+        {% else %}
+          <input name="accountant" placeholder="Name">
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Cash Report</h3>
+    <div style="margin-bottom:14px;">
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:0;">
+        <input type="checkbox" id="hasAedCheckbox" style="width:auto;" onchange="toggleAedSection()">
+        This shift also includes AED cash
+      </label>
+    </div>
+
+    <div class="grid grid-2" style="margin-bottom:14px;">
+      <div><label>Petty Cash Amount</label><input name="petty_cash" type="number" step="0.001" value="0"></div>
+      <input type="hidden" value="0.1000" name="aed_exchange_rate" id="aedRate" class="calc-input">
+    </div>
+
+    <div class="grid grid-2">
+      <div>
+        <h3 style="font-size:14px;">OMR</h3>
+        {% for d in denoms %}
+        <div class="denom-row">
+          <div class="denom-label">{{ d }}</div>
+          <input type="number" min="0" value="0" style="width:90px;" name="denom_{{ d }}" data-denom="{{ d }}" class="calc-input">
+          <div class="denom-amount" id="denomAmt_{{ d }}" style="width:90px; color:#8A8578; font-size:13px;">0.000</div>
+        </div>
+        {% endfor %}
+        <div class="total-strip"><span>Total OMR</span><span id="cashOmrDisplay">0.000</span></div>
+      </div>
+
+      <div class="aed-col" style="display:none;">
+        <h3 style="font-size:14px;">AED</h3>
+        {% for d in aed_denoms %}
+        <div class="denom-row">
+          <div class="denom-label">{{ d }}</div>
+          <input type="number" min="0" value="0" style="width:90px;" name="denom_aed_{{ d }}" data-denom-aed="{{ d }}" class="calc-input">
+          <div class="denom-amount" id="denomAedAmt_{{ d }}" style="width:220px; color:#8A8578; font-size:13px;">0.000</div>
+        </div>
+        {% endfor %}
+        <div class="total-strip"><span>Total AED → OMR</span><span id="cashAedInOmrDisplay">0.000 RO</span></div>
+      </div>
+    </div>
+
+    <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span id="cashTotalDisplay">0.000 RO</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Visa Report</h3>
+    <div id="visaRows"></div>
+    <button type="button" class="btn secondary small" onclick="addVisaRow()">+ Add Machine</button>
+    <div class="total-strip"><span>Total Visa</span><span id="visaTotalDisplay">0.000</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Delivery & Other Reports</h3>
+    <table>
+      <thead><tr><th>Source</th><th>Orders</th><th>Amount</th><th>Cancelled (Orders)</th><th>Cancelled (Amount)</th><th>Attachment</th></tr></thead>
+      <tbody>
+        {% for key, label in delivery_sources %}
+        <tr>
+          <td>{{ label }}</td>
+          <td><input type="number" value="0" style="width:80px;" name="orders_{{ key }}"></td>
+          <td><input type="number" value="0" style="width:90px;" name="amount_{{ key }}" class="calc-input" data-del="{{ key }}"></td>
+          <td><input type="number" value="0" style="width:80px;" name="cancel_orders_{{ key }}"></td>
+          <td><input type="number" value="0" style="width:90px;" name="cancel_amount_{{ key }}"></td>
+          <td><input type="file" name="delivery_attachment_{{ key }}" accept="image/*,.pdf" style="width:150px; padding:4px;"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="total-strip"><span>Total Delivery</span><span id="deliveryTotalDisplay">0.000</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Reconciliation with Foodics</h3>
+    <div class="grid grid-2">
+      <div><label>Actual Total (auto-calculated)</label><input id="actualDisplay" disabled></div>
+      <div><label>Expected from Foodics (manual for now)</label><input name="expected_foodics" type="number" step="0.001" value="0" class="calc-input" id="expected"></div>
+    </div>
+    <div class="total-strip" id="varianceStrip"><span>Variance</span><span id="varianceDisplay">0.000</span></div>
+    <div style="margin-top:12px;"><label>Notes</label><input name="notes" placeholder="Optional"></div>
+  </div>
+
+  <button type="submit" class="btn">Submit</button>
+</form>
+
+<script>
+const DENOMS = {{ denoms|safe }};
+const AED_DENOMS = {{ aed_denoms|safe }};
+const THRESHOLD = 5;
+let visaCount = 0;
+
+function toggleAedSection(){
+  const checked = document.getElementById('hasAedCheckbox').checked;
+  document.querySelectorAll('.aed-col').forEach(el => el.style.display = checked ? 'block' : 'none');
+  if(!checked){
+    document.querySelectorAll('[data-denom-aed]').forEach(inp => inp.value = 0);
+  }
+  calcAll();
+}
+
+function addVisaRow(){
+  visaCount++;
+  const id = 'visa_' + visaCount;
+  const c = document.getElementById('visaRows');
+  const row = document.createElement('div');
+  row.className = 'visa-row';
+  row.id = id;
+  row.style.gridTemplateColumns = '2fr 1fr 2fr auto';
+  row.innerHTML = `
+    <div><label>Machine Serial</label><input name="visa_serial[]" placeholder="Serial"></div>
+    <div><label>Amount</label><input type="number" step="0.001" value="0" name="visa_amount[]" class="calc-input"></div>
+    <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_attachment[]" accept="image/*,.pdf"></div>
+    <button type="button" class="btn secondary small" onclick="document.getElementById('${id}').remove(); calcAll();">Remove</button>`;
+  c.appendChild(row);
+  row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
+  if(window.enhanceFileInputs) window.enhanceFileInputs();
+}
+
+function calcAll(){
+  let cashOmr = 0;
+  DENOMS.forEach(d => {
+    const input = document.querySelector(`[data-denom="${d}"]`);
+    const count = parseFloat(input.value) || 0;
+    const amt = count * parseFloat(d);
+    document.getElementById('denomAmt_' + d).textContent = amt.toFixed(3) + ' RO';
+    cashOmr += amt;
+  });
+  document.getElementById('cashOmrDisplay').textContent = cashOmr.toFixed(3) + ' RO';
+
+  let cashAed = 0;
+  const rate = parseFloat(document.getElementById('aedRate').value) || 0;
+  AED_DENOMS.forEach(d => {
+    const input = document.querySelector(`[data-denom-aed="${d}"]`);
+    const count = parseFloat(input.value) || 0;
+    const amt = count * parseFloat(d);
+    document.getElementById('denomAedAmt_' + d).textContent = amt.toFixed(3) + ' AED = ' + (amt * rate).toFixed(3) + ' RO';
+    cashAed += amt;
+  });
+  const cashAedInOmr = cashAed * rate;
+  document.getElementById('cashAedInOmrDisplay').textContent = cashAedInOmr.toFixed(3) + ' RO';
+
+  const cashTotal = cashOmr + cashAedInOmr;
+  document.getElementById('cashTotalDisplay').textContent = cashTotal.toFixed(3) + ' RO';
+
+  let visaTotal = 0;
+  document.querySelectorAll('[name="visa_amount[]"]').forEach(inp => visaTotal += (parseFloat(inp.value)||0));
+  document.getElementById('visaTotalDisplay').textContent = visaTotal.toFixed(3) + ' RO';
+
+  let deliveryTotal = 0;
+  document.querySelectorAll('[data-del]').forEach(inp => deliveryTotal += (parseFloat(inp.value)||0));
+  document.getElementById('deliveryTotalDisplay').textContent = deliveryTotal.toFixed(3) + ' RO';
+
+  const actual = cashTotal + visaTotal + deliveryTotal;
+  document.getElementById('actualDisplay').value = actual.toFixed(3) + ' RO';
+
+  const expected = parseFloat(document.getElementById('expected').value) || 0;
+  const variance = actual - expected;
+  document.getElementById('varianceDisplay').textContent = variance.toFixed(3) + ' RO';
+  const strip = document.getElementById('varianceStrip');
+  strip.classList.toggle('flag', Math.abs(variance) > THRESHOLD);
+}
+
+document.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
+addVisaRow();
+calcAll();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,62 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+<div class="subnav">
+  <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' %}active{% endif %}">Users</a>
+  <a href="{% url 'add_branch' %}" class="{% if active_tab == 'branches' %}active{% endif %}">Branches</a>
+</div>
+
+<div class="card">
+  <h3>Edit {{ profile.get_role_display }}</h3>
+  <form method="post">
+    {% csrf_token %}
+
+    {% if profile.role == 'waiter' %}
+      <div class="grid grid-2" style="margin-bottom:12px;">
+        <div><label>Head Cashier Name</label><input name="head_cashier_name" value="{{ profile.head_cashier_name }}"></div>
+        <div><label>Punch ID</label><input name="punch_id" value="{{ profile.punch_id }}"></div>
+      </div>
+      <div style="margin-bottom:12px; max-width:300px;">
+        <label>Branch</label>
+        <select name="branch">
+          {% for b in branches %}
+            <option value="{{ b.id }}" {% if profile.branch_id == b.id %}selected{% endif %}>{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="margin-bottom:12px; max-width:300px;">
+        <label>Reset Password (leave blank to keep current)</label>
+        <input name="new_password" type="password" placeholder="At least 8 characters" minlength="8">
+      </div>
+    {% else %}
+      <div style="margin-bottom:12px; max-width:300px;">
+        <label>Username</label>
+        <input name="username" value="{{ target.username }}">
+      </div>
+
+      <div style="margin-bottom:4px; max-width:300px;">
+        <label>New Password</label>
+        <div style="position:relative;">
+          <input name="new_password" type="password" id="pwInput" placeholder="Leave blank to keep unchanged" style="padding-right:38px;">
+          <button type="button" onclick="togglePw()" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; padding:0; display:flex;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C5A52" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    {% endif %}
+
+    <button type="submit" class="btn" style="margin-top:14px;">Save Changes</button>
+    <a href="{% url 'create_user' %}" class="btn secondary" style="margin-left:8px; text-decoration:none; display:inline-block;">Cancel</a>
+  </form>
+</div>
+
+<script>
+function togglePw(){
+  const input = document.getElementById('pwInput');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+</script>
+{% endblock %}

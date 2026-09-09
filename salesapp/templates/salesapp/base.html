@@ -1,0 +1,223 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sales Reconciliation System</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, Segoe UI, Arial, sans-serif; background:#F6F5F1; color:#20242A; margin:0; padding:0; overflow-x:hidden; }
+
+  .topbar { background:#1C1917; color:#fff; height:60px; display:flex; align-items:center; padding:0 20px; gap:14px; }
+  .topbar .menu-icon { width:20px; height:20px; color:#D4A843; flex-shrink:0; }
+  .topbar .logo { width:32px; height:32px; flex-shrink:0; object-fit:contain; }
+  .topbar .title { font-weight:700; font-size:16px; letter-spacing:0.2px; }
+  .topbar .spacer { flex:1; }
+  .topbar .user-block { display:flex; align-items:center; gap:10px; }
+  .topbar .avatar { width:34px; height:34px; border-radius:50%; background:transparent; border:1.5px solid #D4A843; color:#D4A843; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; flex-shrink:0; }
+  .topbar .user-name { font-size:13px; font-weight:600; color:#fff; }
+  .role-badge { font-size:10px; font-weight:700; padding:3px 9px; border-radius:20px; letter-spacing:0.4px; text-transform:uppercase; }
+  .role-admin, .role-it { background:#FAEEDA; color:#854F0B; }
+  .role-waiter { background:#E4F1EA; color:#2E7D5B; }
+  .role-collector { background:#E6F1FB; color:#185FA5; }
+  .role-audit { background:#EEEDFE; color:#3C3489; }
+
+  .layout { display:flex; min-height:calc(100vh - 60px); align-items:stretch; }
+  .sidebar { width:230px; background:#211D18; color:#fff; display:flex; flex-direction:column; padding:16px 0; flex-shrink:0; }
+  .sidebar a { display:flex; align-items:center; gap:10px; padding:12px 20px; color:#C9C5BC; text-decoration:none; font-size:14px; font-weight:600; border-left:3px solid transparent; }
+  .sidebar a svg { width:17px; height:17px; flex-shrink:0; opacity:0.85; }
+  .sidebar a.active { background:rgba(212,168,67,0.12); color:#D4A843; border-left:3px solid #D4A843; }
+  .sidebar a.active svg { opacity:1; }
+  .sidebar a:hover { background:rgba(255,255,255,0.05); }
+  .sidebar form.logout-form { margin:0; }
+  .sidebar button.logout-btn { display:flex; align-items:center; gap:10px; padding:12px 20px; color:#C9C5BC; font-size:14px; font-weight:600; border-left:3px solid transparent; background:none; border-top:none; border-right:none; border-bottom:none; width:100%; text-align:left; cursor:pointer; font-family:'Inter',sans-serif; }
+  .sidebar button.logout-btn:hover { background:rgba(255,255,255,0.05); }
+  .sidebar button.logout-btn svg { width:17px; height:17px; flex-shrink:0; opacity:0.85; }
+  .sidebar .spacer { flex:1; }
+  .sidebar .bottom-links { border-top:1px solid rgba(255,255,255,0.1); padding-top:8px; }
+
+  .main-content { flex:1; padding:24px 40px 40px; max-width:none; }
+  .card { background:#FFFFFF; border-radius:14px; padding:20px; margin-bottom:16px; border:1px solid #E7E4DB; }
+  .card h3 { margin:0 0 14px; font-size:16px; font-weight:700; color:#1F3B4D; }
+  label { display:block; font-size:13px; color:#5C5A52; margin-bottom:4px; }
+  input, select, textarea { width:100%; padding:9px 10px; border:1px solid #D8D5CB; border-radius:8px; font-family:'Inter',sans-serif; font-size:14px; background:#FBFAF7; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:#D4A843; }
+  .grid { display:grid; gap:12px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-5 { grid-template-columns: repeat(5, 1fr); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .denom-row { display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid #F0EEE7; }
+  .denom-label { width:60px; font-weight:600; color:#1F3B4D; font-size:14px; }
+  .btn { background:#1C1917; color:#fff; border:none; border-radius:8px; padding:10px 18px; font-family:'Inter',sans-serif; font-weight:600; font-size:14px; cursor:pointer; }
+  .btn.secondary { background:#EFEDE5; color:#1F3B4D; }
+  .btn.small { padding:6px 12px; font-size:12px; }
+  .total-strip { display:flex; justify-content:space-between; background:#F0EEE7; border-radius:10px; padding:14px 18px; margin-top:6px; font-weight:700; color:#1F3B4D; }
+  .total-strip.flag { background:#FBE9E6; color:#B94A3F; }
+  .success-banner { background:#E4F1EA; color:#2E7D5B; border-radius:10px; padding:16px 18px; margin-bottom:16px; font-size:15px; }
+  .success-banner strong { font-size:17px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { padding:9px 8px; text-align:center; border-bottom:1px solid #EEECE4; }
+  th { color:#8A8578; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.3px; }
+  .badge { padding:3px 10px; border-radius:20px; font-size:12px; font-weight:700; }
+  .ok { background:#E4F1EA; color:#2E7D5B; }
+  .flag { background:#FBE9E6; color:#B94A3F; }
+  .visa-row { display:grid; grid-template-columns: 2fr 1fr auto; gap:10px; align-items:end; margin-bottom:8px; }
+  .messages { margin-bottom:16px; }
+  .msg { padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:8px; }
+  .msg.success { background:#E4F1EA; color:#2E7D5B; }
+  .msg.error { background:#FBE9E6; color:#B94A3F; }
+  .subnav { display:flex; gap:18px; margin-bottom:16px; }
+  .subnav a { font-size:13px; font-weight:600; color:#8A8578; text-decoration:none; padding-bottom:4px; border-bottom:2px solid transparent; }
+  .subnav a.active { color:#1F3B4D; border-bottom:2px solid #1F3B4D; }
+  .icon-btn { width:34px; height:34px; border-radius:8px; border:1.5px solid; display:inline-flex; align-items:center; justify-content:center; background:#fff; cursor:pointer; margin-left:4px; }
+  .icon-btn svg { width:16px; height:16px; }
+  .icon-btn.edit { border-color:#3B6FE0; color:#3B6FE0; }
+  .icon-btn.pause { border-color:#E0A82E; color:#E0A82E; }
+  .icon-btn.play { border-color:#2E9E5B; color:#2E9E5B; }
+  .icon-btn.delete { border-color:#E0432E; color:#E0432E; }
+  .modal-overlay { position:fixed; inset:0; background:rgba(28,25,23,0.55); display:flex; align-items:flex-start; justify-content:center; z-index:1000; padding:40px 20px; overflow-y:auto; }
+  .modal-box { background:#F6F5F1; border-radius:16px; max-width:900px; width:100%; padding:0; position:relative; }
+  .modal-close { position:absolute; top:14px; right:16px; font-size:26px; line-height:1; color:#8A8578; text-decoration:none; z-index:2; }
+  .modal-inner { padding:24px; max-height:88vh; overflow-y:auto; }
+</style>
+</head>
+<body>
+
+{% if user.is_authenticated %}
+<div class="topbar">
+  <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  <img class="logo" src="{% static 'salesapp/logo.png' %}" alt="Logo">
+  <span class="title">Sales Reconciliation System</span>
+  <div class="spacer"></div>
+  <div class="user-block">
+    <div class="avatar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#D4A843" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6"/></svg>
+    </div>
+    <div>
+      <div class="user-name">{{ user.profile.head_cashier_name|default:user.username }}</div>
+    </div>
+    <span class="role-badge role-{{ user.profile.role }}">{{ user.profile.get_role_display }}</span>
+  </div>
+</div>
+{% endif %}
+
+<div class="layout">
+  {% if user.is_authenticated %}
+  <nav class="sidebar">
+    {% if user.profile.role == 'waiter' or user.profile.is_full_access %}
+      <a href="{% url 'entry' %}" class="{% if active_tab == 'entry' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+        Waiter Entry
+      </a>
+    {% endif %}
+    {% if user.profile.role == 'waiter' %}
+      <a href="{% url 'waiter_history' %}" class="{% if active_tab == 'waiter_history' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        History
+      </a>
+    {% endif %}
+    {% if user.profile.role == 'collector' or user.profile.is_full_access %}
+      <a href="{% url 'collector' %}" class="{% if active_tab == 'collector' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        Collector Handover
+      </a>
+    {% endif %}
+    {% if user.profile.role == 'audit' or user.profile.is_full_access %}
+      <a href="{% url 'dashboard' %}" class="{% if active_tab == 'dashboard' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+        Audit Dashboard
+      </a>
+    {% endif %}
+    {% if user.profile.role == 'collector' or user.profile.role == 'audit' or user.profile.is_full_access %}
+      <a href="{% url 'archive_history' %}" class="{% if active_tab == 'history' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        Archive
+      </a>
+    {% endif %}
+    <div class="spacer"></div>
+    <div class="bottom-links">
+      {% if user.profile.is_full_access %}
+        <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' or active_tab == 'branches' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </a>
+        <a href="{% url 'audit_log' %}" class="{% if active_tab == 'audit_log' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c2.5 0 4.75 1.02 6.36 2.64"/><path d="M21 3v6h-6"/></svg>
+          Audit Log
+        </a>
+      {% endif %}
+      <form method="post" action="{% url 'logout' %}" class="logout-form">
+        {% csrf_token %}
+        <button type="submit" class="logout-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Logout
+        </button>
+      </form>
+    </div>
+  </nav>
+  {% endif %}
+  <main class="main-content">
+    {% if messages %}
+    <div class="messages">
+      {% for message in messages %}
+        <div class="msg {{ message.tags }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script>
+// Replace the browser's default "No file chosen" text on every file input
+// with a compact custom button + filename, site-wide. Callable again after
+// dynamically-added rows (e.g. "+ Add Machine") introduce new file inputs.
+window.enhanceFileInputs = function(){
+  document.querySelectorAll('input[type="file"]').forEach(function(input){
+    if(input.dataset.enhanced) return;
+    input.dataset.enhanced = '1';
+
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
+    input.parentNode.insertBefore(wrapper, input);
+    wrapper.appendChild(input);
+    input.style.display = 'none';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn secondary small';
+    btn.textContent = 'Upload';
+    btn.title = 'Upload file';
+    btn.onclick = function(){ input.click(); };
+
+    const link = document.createElement('a');
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.style.cssText = 'font-size:12px; color:#3B6FE0; text-decoration:underline; display:none;';
+
+    input.addEventListener('change', function(){
+      if(input.files.length){
+        const file = input.files[0];
+        btn.textContent = '✓ Uploaded';
+        btn.style.borderColor = '#2E9E5B';
+        btn.style.color = '#2E9E5B';
+        link.href = URL.createObjectURL(file);
+        link.textContent = file.name;
+        link.style.display = 'inline';
+      } else {
+        btn.textContent = 'Upload';
+        btn.style.borderColor = '';
+        btn.style.color = '';
+        link.style.display = 'none';
+      }
+    });
+
+    wrapper.appendChild(btn);
+    wrapper.appendChild(link);
+  });
+};
+document.addEventListener('DOMContentLoaded', window.enhanceFileInputs);
+</script>
+</body>
+</html>

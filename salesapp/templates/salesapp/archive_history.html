@@ -1,0 +1,67 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+<div class="card">
+  <h3>Archive</h3>
+  <p style="color:#8A8578; font-size:13px; margin-top:0;">Entries that have been archived (removed from the main list). Unarchive to bring one back.</p>
+  <form method="get">
+    <div class="grid grid-3" style="margin-bottom:14px;">
+      <div><label>Filter by Branch</label><input name="branch_filter" value="{{ branch_filter }}" placeholder="e.g. Kucu Ibri"></div>
+      <div><label>Filter by Date</label><input name="date_filter" type="date" value="{{ date_filter }}"></div>
+      <div><label>Submit Request No.</label><input name="search_ref" value="{{ search_ref }}" placeholder="e.g. K-DH001-0002"></div>
+    </div>
+    <button type="submit" class="btn small">Apply</button>
+  </form>
+</div>
+
+<div class="card">
+  {% for group in branch_groups %}
+  <div style="margin-top:12px; border:1px solid #E7E4DB; border-radius:10px; overflow:hidden;">
+    <div onclick="toggleHistoryGroup('history-group-{{ forloop.counter }}')" style="display:flex; align-items:center; gap:16px; padding:12px 16px; background:#F0EEE7; cursor:pointer;">
+      <span id="arrow-history-group-{{ forloop.counter }}" style="font-size:11px; color:#1F3B4D; display:inline-block; transition:transform 0.15s;">&#9654;</span>
+      <strong style="font-size:14px; color:#1F3B4D;">{{ group.branch.name }}</strong>
+      <span style="font-size:12px; color:#8A8578; margin-left:auto;">{{ group.entries|length }} archived</span>
+    </div>
+    <div id="history-group-{{ forloop.counter }}" style="display:none; overflow-x:auto;">
+    <table style="margin:0;">
+      <thead>
+        <tr>
+          <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Accountant</th><th>Actual</th><th>Variance</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in group.entries %}
+        <tr>
+          <td><strong>{{ e.reference_id }}</strong></td>
+          <td>{{ e.date }}</td>
+          <td>Shift {{ e.shift }}</td>
+          <td>{{ e.accountant|default:"-" }}</td>
+          <td>{{ e.actual_total|floatformat:3 }} RO</td>
+          <td style="{% if e.variance != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{{ e.variance|floatformat:3 }} RO</td>
+          <td>
+            <form method="post" action="{% url 'archive_entry' e.id %}" style="display:inline;">
+              {% csrf_token %}
+              <button type="submit" class="btn secondary small">Unarchive</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% empty %}
+  <div style="margin-top:16px; color:#8A8578; font-size:13px;">No archived entries.</div>
+  {% endfor %}
+</div>
+
+<script>
+function toggleHistoryGroup(id){
+  const el = document.getElementById(id);
+  const arrow = document.getElementById('arrow-' + id);
+  const isOpen = el.style.display === 'block';
+  el.style.display = isOpen ? 'none' : 'block';
+  arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+}
+</script>
+{% endblock %}

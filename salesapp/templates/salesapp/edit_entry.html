@@ -1,0 +1,255 @@
+{% extends "salesapp/base.html" %}
+{% load app_filters %}
+{% block content %}
+
+<div class="card">
+  <h3>Edit Entry — {{ entry.reference_id }}</h3>
+  <p style="color:#8A8578; font-size:13px; margin-top:0;">Branch: {{ entry.branch.name }} (locked — can't be changed here)</p>
+</div>
+
+<form method="post" id="editForm" enctype="multipart/form-data">
+  {% csrf_token %}
+
+  <div class="card">
+    <h3>Shift Details</h3>
+    <div class="grid grid-4">
+      <div><label>Branch</label><input value="{{ entry.branch.name }}" disabled></div>
+      <div><label>Date</label><input name="date" type="date" value="{{ entry.date|date:'Y-m-d' }}" required></div>
+      <div><label>Shift</label>
+        <select name="shift">
+          {% for value, label in shift_choices %}
+            <option value="{{ value }}" {% if entry.shift == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div><label>Accountant Name</label><input name="accountant" value="{{ entry.accountant }}"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Cash Report</h3>
+    <div style="margin-bottom:14px;">
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:0;">
+        <input type="checkbox" id="hasAedCheckbox" style="width:auto;" onchange="toggleAedSection()">
+        This shift also includes AED cash
+      </label>
+    </div>
+
+    <div class="grid grid-2" style="margin-bottom:14px;">
+      <div><label>Staff Discount / Coupons</label><input name="staff_discount" type="number" step="0.001" value="{{ entry.staff_discount }}" class="calc-input"></div>
+      <div><label>Petty Cash Amount</label><input name="petty_cash" type="number" step="0.001" value="{{ entry.petty_cash }}"></div>
+    </div>
+    <div class="grid grid-2" style="margin-bottom:14px;">
+      <div class="aed-col" style="display:none;">
+        <label>AED → OMR Exchange Rate</label>
+        <input type="number" step="0.0001" value="{{ entry.aed_exchange_rate }}" name="aed_exchange_rate" id="aedRate" class="calc-input">
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <div>
+        <h3 style="font-size:14px;">OMR</h3>
+        {% for d in denoms %}
+        <div class="denom-row">
+          <div class="denom-label">{{ d }}</div>
+          <input type="number" min="0" style="width:90px;" name="denom_{{ d }}" data-denom="{{ d }}" class="calc-input">
+          <div class="denom-amount" id="denomAmt_{{ d }}" style="width:90px; color:#8A8578; font-size:13px;">0.000</div>
+        </div>
+        {% endfor %}
+        <div class="total-strip"><span>Total OMR</span><span id="cashOmrDisplay">0.000</span></div>
+      </div>
+
+      <div class="aed-col" style="display:none;">
+        <h3 style="font-size:14px;">AED</h3>
+        {% for d in aed_denoms %}
+        <div class="denom-row">
+          <div class="denom-label">{{ d }}</div>
+          <input type="number" min="0" style="width:90px;" name="denom_aed_{{ d }}" data-denom-aed="{{ d }}" class="calc-input">
+          <div class="denom-amount" id="denomAedAmt_{{ d }}" style="width:220px; color:#8A8578; font-size:13px;">0.000</div>
+        </div>
+        {% endfor %}
+        <div class="total-strip"><span>Total AED → OMR</span><span id="cashAedInOmrDisplay">0.000 RO</span></div>
+      </div>
+    </div>
+
+    <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span id="cashTotalDisplay">0.000</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Visa Report</h3>
+    <div id="visaRows"></div>
+    <button type="button" class="btn secondary small" onclick="addVisaRow()">+ Add Machine</button>
+    <div class="total-strip"><span>Total Visa</span><span id="visaTotalDisplay">0.000</span></div>
+    {% for vf in entry.visa_files.all %}
+      <div style="margin-top:6px; font-size:13px;"><a href="{{ vf.file.url }}" target="_blank" style="color:#3B6FE0;">📎 {{ vf.serial|default:"Machine" }} — current attachment</a></div>
+    {% endfor %}
+    <p style="font-size:12px; color:#8A8578; margin-top:8px;">To attach a new receipt to a machine, use the file field on that machine's row above.</p>
+  </div>
+
+  <div class="card">
+    <h3>Delivery & Other Reports</h3>
+    <table>
+      <thead><tr><th>Source</th><th>Orders</th><th>Amount</th><th>Cancelled (Orders)</th><th>Cancelled (Amount)</th><th>Attachment</th></tr></thead>
+      <tbody>
+        {% for key, label in delivery_sources %}
+        <tr>
+          <td>{{ label }}</td>
+          <td><input type="number" style="width:80px;" name="orders_{{ key }}" data-del-orders="{{ key }}"></td>
+          <td><input type="number" step="0.001" style="width:90px;" name="amount_{{ key }}" data-del-amount="{{ key }}" class="calc-input"></td>
+          <td><input type="number" style="width:80px;" name="cancel_orders_{{ key }}" data-del-cancelorders="{{ key }}"></td>
+          <td><input type="number" step="0.001" style="width:90px;" name="cancel_amount_{{ key }}" data-del-cancelamount="{{ key }}"></td>
+          <td>
+            {% with file=entry|get_delivery_attachment:key %}
+              {% if file %}<a href="{{ file.url }}" target="_blank" style="font-size:12px; color:#3B6FE0; display:block; margin-bottom:4px;">📎 Current</a>{% endif %}
+            {% endwith %}
+            <input type="file" name="delivery_attachment_{{ key }}" accept="image/*,.pdf" style="width:150px; padding:4px;">
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="total-strip"><span>Total Delivery</span><span id="deliveryTotalDisplay">0.000</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Reconciliation with Foodics</h3>
+    <div class="grid grid-2">
+      <div><label>Actual Total (auto-calculated)</label><input id="actualDisplay" disabled></div>
+      <div><label>Expected from Foodics</label><input name="expected_foodics" type="number" step="0.001" value="{{ entry.expected_foodics }}" class="calc-input" id="expected"></div>
+    </div>
+    <div class="total-strip" id="varianceStrip"><span>Variance</span><span id="varianceDisplay">0.000</span></div>
+    <div style="margin-top:12px;"><label>Notes</label><input name="notes" value="{{ entry.notes }}"></div>
+  </div>
+
+  <button type="submit" class="btn">Save Changes</button>
+  <a href="{% url 'dashboard' %}" class="btn secondary" style="margin-left:8px; text-decoration:none; display:inline-block;">Cancel</a>
+</form>
+
+<form method="post" action="{% url 'archive_entry' entry.id %}" onsubmit="return confirm('Archive {{ entry.reference_id }}?');" style="margin-top:10px;">
+  {% csrf_token %}
+  <button type="submit" class="btn secondary">{% if entry.is_archived %}Unarchive{% else %}Archive{% endif %} This Entry</button>
+</form>
+
+{{ entry.cash_counts|json_script:"existingCashCounts" }}
+{{ entry.cash_counts_aed|json_script:"existingCashCountsAed" }}
+{{ entry.visa_entries|json_script:"existingVisaEntries" }}
+{{ entry.delivery_data|json_script:"existingDeliveryData" }}
+
+<script>
+const DENOMS = {{ denoms|safe }};
+const AED_DENOMS = {{ aed_denoms|safe }};
+const THRESHOLD = 5;
+let visaCount = 0;
+const existingCashCounts = JSON.parse(document.getElementById('existingCashCounts').textContent);
+const existingCashCountsAed = JSON.parse(document.getElementById('existingCashCountsAed').textContent);
+const existingVisaEntries = JSON.parse(document.getElementById('existingVisaEntries').textContent);
+const existingDeliveryData = JSON.parse(document.getElementById('existingDeliveryData').textContent);
+
+DENOMS.forEach(d => {
+  const input = document.querySelector(`[data-denom="${d}"]`);
+  if(input && existingCashCounts[d]) input.value = existingCashCounts[d];
+});
+AED_DENOMS.forEach(d => {
+  const input = document.querySelector(`[data-denom-aed="${d}"]`);
+  if(input && existingCashCountsAed[d]) input.value = existingCashCountsAed[d];
+});
+
+function toggleAedSection(){
+  const checked = document.getElementById('hasAedCheckbox').checked;
+  document.querySelectorAll('.aed-col').forEach(el => el.style.display = checked ? 'block' : 'none');
+  if(!checked){
+    document.querySelectorAll('[data-denom-aed]').forEach(inp => inp.value = 0);
+  }
+  calcAll();
+}
+
+const hasExistingAed = Object.values(existingCashCountsAed).some(v => (parseFloat(v) || 0) > 0);
+if(hasExistingAed){
+  document.getElementById('hasAedCheckbox').checked = true;
+  document.querySelectorAll('.aed-col').forEach(el => el.style.display = 'block');
+}
+
+Object.keys(existingDeliveryData).forEach(key => {
+  const row = existingDeliveryData[key];
+  const oInput = document.querySelector(`[data-del-orders="${key}"]`);
+  const aInput = document.querySelector(`[data-del-amount="${key}"]`);
+  const coInput = document.querySelector(`[data-del-cancelorders="${key}"]`);
+  const caInput = document.querySelector(`[data-del-cancelamount="${key}"]`);
+  if(oInput) oInput.value = row.orders || 0;
+  if(aInput) aInput.value = row.amount || 0;
+  if(coInput) coInput.value = row.cancel_orders || 0;
+  if(caInput) caInput.value = row.cancel_amount || 0;
+});
+
+function addVisaRow(serial = '', amount = ''){
+  visaCount++;
+  const id = 'visa_' + visaCount;
+  const c = document.getElementById('visaRows');
+  const row = document.createElement('div');
+  row.className = 'visa-row';
+  row.id = id;
+  row.style.gridTemplateColumns = '2fr 1fr 2fr auto';
+  row.innerHTML = `
+    <div><label>Machine Serial</label><input name="visa_serial[]" placeholder="Serial" value="${serial}"></div>
+    <div><label>Amount</label><input type="number" step="0.001" name="visa_amount[]" value="${amount}" class="calc-input"></div>
+    <div><label>New Receipt (optional)</label><input type="file" name="visa_attachment[]" accept="image/*,.pdf"></div>
+    <button type="button" class="btn secondary small" onclick="document.getElementById('${id}').remove(); calcAll();">Remove</button>`;
+  c.appendChild(row);
+  row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
+  if(window.enhanceFileInputs) window.enhanceFileInputs();
+}
+
+if(existingVisaEntries.length > 0){
+  existingVisaEntries.forEach(v => addVisaRow(v.serial || '', v.amount || ''));
+} else {
+  addVisaRow();
+}
+
+function calcAll(){
+  let cashOmr = 0;
+  DENOMS.forEach(d => {
+    const input = document.querySelector(`[data-denom="${d}"]`);
+    const count = parseFloat(input.value) || 0;
+    const amt = count * parseFloat(d);
+    document.getElementById('denomAmt_' + d).textContent = amt.toFixed(3);
+    cashOmr += amt;
+  });
+  document.getElementById('cashOmrDisplay').textContent = cashOmr.toFixed(3);
+
+  let cashAed = 0;
+  const rate = parseFloat(document.getElementById('aedRate').value) || 0;
+  AED_DENOMS.forEach(d => {
+    const input = document.querySelector(`[data-denom-aed="${d}"]`);
+    const count = parseFloat(input.value) || 0;
+    const amt = count * parseFloat(d);
+    document.getElementById('denomAedAmt_' + d).textContent = amt.toFixed(3) + ' AED = ' + (amt * rate).toFixed(3) + ' RO';
+    cashAed += amt;
+  });
+  const cashAedInOmr = cashAed * rate;
+  document.getElementById('cashAedInOmrDisplay').textContent = cashAedInOmr.toFixed(3) + ' RO';
+
+  const cashTotal = cashOmr + cashAedInOmr;
+  document.getElementById('cashTotalDisplay').textContent = cashTotal.toFixed(3);
+
+  let visaTotal = 0;
+  document.querySelectorAll('[name="visa_amount[]"]').forEach(inp => visaTotal += (parseFloat(inp.value)||0));
+  document.getElementById('visaTotalDisplay').textContent = visaTotal.toFixed(3);
+
+  let deliveryTotal = 0;
+  document.querySelectorAll('[data-del-amount]').forEach(inp => deliveryTotal += (parseFloat(inp.value)||0));
+  document.getElementById('deliveryTotalDisplay').textContent = deliveryTotal.toFixed(3);
+
+  const actual = cashTotal + visaTotal + deliveryTotal;
+  document.getElementById('actualDisplay').value = actual.toFixed(3);
+
+  const expected = parseFloat(document.getElementById('expected').value) || 0;
+  const variance = actual - expected;
+  document.getElementById('varianceDisplay').textContent = variance.toFixed(3);
+  const strip = document.getElementById('varianceStrip');
+  strip.classList.toggle('flag', Math.abs(variance) > THRESHOLD);
+}
+
+document.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
+calcAll();
+</script>
+{% endblock %}

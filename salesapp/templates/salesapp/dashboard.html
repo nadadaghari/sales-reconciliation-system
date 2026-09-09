@@ -1,0 +1,238 @@
+{% extends "salesapp/base.html" %}
+{% load app_filters %}
+{% block content %}
+
+<div class="card">
+  <h3>All Entries</h3>
+  <form method="get">
+    <div class="grid grid-5" style="margin-bottom:14px;">
+      <div>
+        <label>Filter by Shift</label>
+        <div style="display:flex; gap:14px; padding-top:8px;">
+          {% for value, label in shift_choices %}
+            <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin-bottom:0;">
+              <input type="checkbox" name="shift_filter" value="{{ value }}" style="width:auto;" {% if value in shift_filter %}checked{% endif %}>
+              {{ label }}
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div>
+        <label>Filter by Branch</label>
+        <input name="branch_filter" value="{{ branch_filter }}" placeholder="e.g. Kucu Ibri">
+      </div>
+      <div>
+        <label>Date From</label>
+        <input name="date_from" type="date" value="{{ date_from }}">
+      </div>
+      <div>
+        <label>Date To</label>
+        <input name="date_to" type="date" value="{{ date_to }}">
+      </div>
+      <div>
+        <label>Submit Request No.</label>
+        <input name="search_ref" value="{{ search_ref }}" placeholder="e.g. K-DH001-0002">
+      </div>
+    </div>
+    <button type="submit" class="btn small">Apply</button>
+  </form>
+
+  {% for group in branch_groups %}
+  <div style="margin-top:12px; border:1px solid #E7E4DB; border-radius:10px; overflow:hidden;">
+    <div onclick="toggleAuditGroup('audit-group-{{ forloop.counter }}')" style="display:flex; align-items:center; gap:16px; padding:12px 16px; background:#F0EEE7; cursor:pointer; flex-wrap:wrap;">
+      <span id="arrow-audit-group-{{ forloop.counter }}" style="font-size:11px; color:#1F3B4D; display:inline-block; transition:transform 0.15s;">&#9654;</span>
+      <strong style="flex:0 0 160px; font-size:14px; color:#1F3B4D;">{{ group.branch.name }}</strong>
+      <span style="font-size:12px; margin-left:auto; {% if group.total_variance != 0 %}color:#B94A3F;{% else %}color:#2E7D5B;{% endif %}">Variance <strong>{{ group.total_variance|floatformat:3 }}</strong></span>
+    </div>
+    <div id="audit-group-{{ forloop.counter }}" style="display:none; overflow-x:auto;">
+    <table style="margin:0;">
+      <thead>
+        <tr>
+          <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Accountant</th>
+          <th>Waiter Actual</th><th>Expected</th><th>Collector Actual</th><th>Final Variance</th>
+          <th>Status</th><th>Note</th><th></th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in group.rows %}
+        {% if row.show_date_divider %}
+        <tr>
+          <td colspan="12" style="padding:10px 8px 4px; border-bottom:none;">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <div style="flex:1; border-top:3px solid #F0EEE7;"></div>
+              <strong style="font-size:12px; color:#1F3B4D; white-space:nowrap;">{{ row.entry.date }}</strong>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+        <tr {% if selected_entry and selected_entry.id == row.entry.id %}style="background:#F0EEE7;"{% endif %}>
+          <td><strong>{{ row.entry.reference_id }}</strong></td>
+          <td>{{ row.entry.date }}</td>
+          <td>Shift {{ row.entry.shift }}</td>
+          <td>{{ row.entry.accountant|default:"-" }}</td>
+          <td><span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.actual_total }} RO</span></td>
+          <td><span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.expected_foodics }} RO</span></td>
+          <td>{% if row.collector %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.collector.actual_total }} RO</span>{% else %}-{% endif %}</td>
+          <td>{% if row.collector %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.collector.diff_from_expected }} RO</span>{% else %}-{% endif %}</td>
+          <td>
+            {% if row.simple_status == 'audited' %}
+              <span class="badge ok">Audited</span>
+            {% elif row.simple_status == 'collected' %}
+              <span class="badge ok" style="background:#E6F1FB; color:#185FA5;">Collected</span>
+            {% else %}
+              <span class="badge flag">Not Collected</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.entry.audit_notes %}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D4A843" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" title="Has a note"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+            {% endif %}
+          </td>
+          <td>
+            <a href="?entry_id={{ row.entry.id }}&{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="icon-btn edit" title="Select">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </a>
+          </td>
+          <td>
+            <form method="post" action="{% url 'archive_entry' row.entry.id %}" style="display:inline;" onsubmit="return confirm('Archive {{ row.entry.reference_id }}?');">
+              {% csrf_token %}
+              <button type="submit" class="icon-btn delete" title="Archive">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% empty %}
+  <div style="margin-top:16px; color:#8A8578; font-size:13px;">No entries found</div>
+  {% endfor %}
+</div>
+
+<script>
+function toggleAuditGroup(id){
+  const el = document.getElementById(id);
+  const arrow = document.getElementById('arrow-' + id);
+  const isOpen = el.style.display === 'block';
+  el.style.display = isOpen ? 'none' : 'block';
+  arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+}
+</script>
+
+{% if selected_entry %}
+<div class="modal-overlay">
+<div class="modal-box">
+<a href="{% url 'dashboard' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="modal-close" title="Close">&times;</a>
+<div class="modal-inner">
+<a href="{% url 'dashboard' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="btn secondary small" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; margin-bottom:16px;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+  Back
+</a>
+
+<div class="card">
+  <h3>What the Waiter / Head Cashier Reported</h3>
+  <div class="grid grid-4">
+    <div><label>Submit Request No.</label><input value="{{ selected_entry.reference_id }}" disabled></div>
+    <div><label>Branch</label><input value="{{ selected_entry.branch.name }}" disabled></div>
+    <div><label>Date</label><input value="{{ selected_entry.date }}" disabled></div>
+    <div><label>Shift</label><input value="Shift {{ selected_entry.shift }}" disabled></div>
+  </div>
+  <div class="grid grid-2" style="margin-top:12px;">
+    <div><label>Accountant / Head Cashier</label><input value="{{ selected_entry.accountant|default:'-' }}" disabled></div>
+    <div><label>Submitted At</label><input value="{{ selected_entry.created_at }}" disabled></div>
+  </div>
+
+  <h3 style="margin-top:20px;">Cash Report - OMR</h3>
+  {% for row in entry_denoms %}
+  <div class="denom-row">
+    <div class="denom-label">{{ row.denom }}</div>
+    <div style="width:70px;">x {{ row.count }}</div>
+    <div style="color:#8A8578; font-size:13px;">{{ row.amount|floatformat:3 }} RO</div>
+  </div>
+  {% endfor %}
+
+  {% if entry_aed_denoms %}
+  <h3 style="margin-top:20px;">Cash Report - AED (rate: {{ selected_entry.aed_exchange_rate }})</h3>
+  {% for row in entry_aed_denoms %}
+  <div class="denom-row">
+    <div class="denom-label">{{ row.denom }}</div>
+    <div style="width:70px;">x {{ row.count }}</div>
+    <div style="color:#8A8578; font-size:13px;">{{ row.amount|floatformat:3 }} AED = {{ row.omr_equivalent|floatformat:3 }} RO</div>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <div class="total-strip"><span>Combined Total Cash (OMR + AED)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+
+  <h3 style="margin-top:20px;">Visa Report</h3>
+  {% for v in selected_entry.visa_entries %}
+    <div class="denom-row"><div style="flex:1;">{{ v.serial|default:"-" }}</div><div>{{ v.amount|floatformat:3 }} RO</div></div>
+  {% empty %}
+    <div style="color:#8A8578; font-size:13px;">No visa machines recorded.</div>
+  {% endfor %}
+  <div class="total-strip"><span>Total Visa</span><span>{{ selected_entry.visa_total }} RO</span></div>
+
+  <h3 style="margin-top:20px;">Delivery & Other Reports</h3>
+  <table>
+    <thead><tr><th>Source</th><th>Orders</th><th>Amount</th><th>Cancelled (Orders)</th><th>Cancelled (Amount)</th></tr></thead>
+    <tbody>
+      {% for key, label in delivery_sources %}
+      <tr>
+        <td>{{ label }}</td>
+        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"orders"|default:0 }}</td>
+        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"amount"|default:0 }}</td>
+        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"cancel_orders"|default:0 }}</td>
+        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"cancel_amount"|default:0 }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="total-strip"><span>Total Delivery</span><span>{{ selected_entry.delivery_total }} RO</span></div>
+
+  <div style="margin-top:14px;"><label>Waiter / Head Cashier Notes</label><input value="{{ selected_entry.notes|default:'-' }}" disabled></div>
+  <div class="total-strip" style="margin-top:16px;"><span>Waiter Total</span><span>{{ selected_entry.actual_total }} RO</span></div>
+</div>
+
+<div class="card">
+  <h3>Collector Handover</h3>
+  {% if selected_handover %}
+  <div class="grid grid-2">
+    <div><label>Collector Name</label><input value="{{ selected_handover.collector_name|default:'-' }}" disabled></div>
+    <div><label>Collector Total</label><input value="{{ selected_handover.actual_total }} RO" disabled></div>
+  </div>
+  <div class="grid grid-2" style="margin-top:12px;">
+    <div><label>Variance (Collector - Waiter)</label><input value="{{ selected_handover.diff_from_waiter }} RO" disabled></div>
+    <div><label>Variance (Collector - Foodics Expected)</label><input value="{{ selected_handover.diff_from_expected }} RO" disabled></div>
+  </div>
+  <div style="margin-top:12px;"><label>Collector Notes</label><input value="{{ selected_handover.notes|default:'-' }}" disabled></div>
+  {% else %}
+  <div style="color:#8A8578; font-size:13px;">Not yet collected by a Collector.</div>
+  {% endif %}
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="entry_id" value="{{ selected_entry.id }}">
+  <div class="card">
+    <h3>Audit Note</h3>
+    {% if selected_entry.is_audited %}
+      <div class="success-banner" style="margin-bottom:14px;">This entry has already been marked as audited.</div>
+    {% endif %}
+    <div><label>Note</label><textarea name="audit_notes" rows="3" placeholder="Write your review note...">{{ selected_entry.audit_notes }}</textarea></div>
+    <button type="submit" class="btn" style="margin-top:14px;">Audit</button>
+  </div>
+</form>
+
+<form method="post" action="{% url 'archive_entry' selected_entry.id %}" onsubmit="return confirm('Archive {{ selected_entry.reference_id }}?');" style="margin-top:10px;">
+  {% csrf_token %}
+  <button type="submit" class="btn secondary">{% if selected_entry.is_archived %}Unarchive{% else %}Archive{% endif %} This Entry</button>
+</form>
+
+</div>
+</div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,17 @@
+﻿# Virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Database
+db.sqlite3
+
+# Media uploads (user-submitted files - usually not versioned)
+media/
+
+# Environment secrets
+.env
+
+# OS / Editor files
+.vscode/
+.DS_Store

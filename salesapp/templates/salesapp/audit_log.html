@@ -1,0 +1,61 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+<div class="subnav">
+  <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' %}active{% endif %}">Users</a>
+  <a href="{% url 'add_branch' %}" class="{% if active_tab == 'branches' %}active{% endif %}">Branches</a>
+  <a href="{% url 'unlock_account' %}" class="{% if active_tab == 'unlock' %}active{% endif %}">Unlock Accounts</a>
+  <a href="{% url 'audit_log' %}" class="{% if active_tab == 'audit_log' %}active{% endif %}">Audit Log</a>
+</div>
+
+<div class="card">
+  <h3>Audit Log</h3>
+  <p style="color:#8A8578; font-size:13px; margin-top:0;">Who did what, when — for accountability. Showing the most recent 300 matching entries.</p>
+  <form method="get">
+    <div class="grid grid-4" style="margin-bottom:14px;">
+      <div>
+        <label>Action</label>
+        <select name="action">
+          <option value="">All actions</option>
+          {% for value, label in action_choices %}
+            <option value="{{ value }}" {% if action_filter == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div><label>Username</label><input name="username" value="{{ username_filter }}" placeholder="e.g. nada@maagroup.om"></div>
+      <div><label>Date From</label><input name="date_from" type="date" value="{{ date_from }}"></div>
+      <div><label>Date To</label><input name="date_to" type="date" value="{{ date_to }}"></div>
+    </div>
+    <button type="submit" class="btn small">Apply</button>
+  </form>
+</div>
+
+<div class="card">
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr><th>When</th><th>User</th><th>Action</th><th>Details</th><th>IP</th></tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td>{{ log.created_at|date:"Y-m-d H:i" }}</td>
+        <td>{{ log.username_snapshot|default:"-" }}</td>
+        <td>
+          {% if 'failed' in log.action %}
+            <span class="badge flag">{{ log.get_action_display }}</span>
+          {% else %}
+            <span class="badge ok">{{ log.get_action_display }}</span>
+          {% endif %}
+        </td>
+        <td>{{ log.description|default:"-" }}</td>
+        <td style="color:#8A8578; font-size:12px;">{{ log.ip_address|default:"-" }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" style="color:#8A8578;">No activity recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

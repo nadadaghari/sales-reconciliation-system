@@ -1,0 +1,94 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+<div class="card">
+  <h3>My Shift History — {{ branch.name }}</h3>
+  <p style="color:#8A8578; font-size:13px; margin-top:0;">A read-only record of everything you've submitted for this branch. You can't edit anything here.</p>
+  <form method="get">
+    <div class="grid grid-2" style="margin-bottom:14px;">
+      <div><label>Date From</label><input name="date_from" type="date" value="{{ date_from }}"></div>
+      <div><label>Date To</label><input name="date_to" type="date" value="{{ date_to }}"></div>
+    </div>
+    <button type="submit" class="btn small">Apply</button>
+  </form>
+</div>
+
+<div class="card">
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Accountant</th>
+        <th>Cash</th><th>Visa</th><th>Delivery</th><th>Actual</th><th>Expected from Foodics</th><th>Variance</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      {% if row.show_date_divider %}
+      <tr data-dategroup="{{ row.date_group }}">
+        <td colspan="11" style="padding:10px 8px 4px; border-bottom:none;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="flex:1; border-top:3px solid #F0EEE7;"></div>
+            <strong style="font-size:12px; color:#1F3B4D; white-space:nowrap;">{{ row.entry.date }}</strong>
+          </div>
+        </td>
+      </tr>
+      {% endif %}
+      <tr data-dategroup="{{ row.date_group }}">
+        <td><strong>{{ row.entry.reference_id }}</strong></td>
+        <td>{{ row.entry.date }}</td>
+        <td>Shift {{ row.entry.shift }}</td>
+        <td>{{ row.entry.accountant|default:"-" }}</td>
+        <td>{{ row.entry.cash_total|floatformat:3 }}</td>
+        <td>{{ row.entry.visa_total|floatformat:3 }}</td>
+        <td>{{ row.entry.delivery_total|floatformat:3 }}</td>
+        <td>{{ row.entry.actual_total|floatformat:3 }}</td>
+        <td>{{ row.entry.expected_foodics|floatformat:3 }}</td>
+        <td style="{% if row.entry.variance != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.variance|floatformat:3 }}</td>
+        <td>
+          {% if row.simple_status == 'audited' %}
+            <span class="badge ok">Audited</span>
+          {% elif row.simple_status == 'collected' %}
+            <span class="badge ok" style="background:#E6F1FB; color:#185FA5;">Collected</span>
+          {% else %}
+            <span class="badge flag">Not Collected</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="11" style="color:#8A8578;">No submissions found for this branch yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if date_group_count > 2 %}
+  <div style="padding:14px 4px 0;">
+    <button type="button" class="btn secondary small" id="showMoreDatesBtn" data-total="{{ date_group_count }}" onclick="showMoreDates()">Show More Dates</button>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+const DATE_STEPS = [2, 4, 7, 10];
+let dateStepIndex = 0;
+
+function updateDateVisibility(){
+  const limit = dateStepIndex < DATE_STEPS.length ? DATE_STEPS[dateStepIndex] : Infinity;
+  document.querySelectorAll('tr[data-dategroup]').forEach(el => {
+    const dg = parseInt(el.dataset.dategroup, 10);
+    el.style.display = dg < limit ? '' : 'none';
+  });
+  const btn = document.getElementById('showMoreDatesBtn');
+  if(btn){
+    const total = parseInt(btn.dataset.total, 10);
+    btn.style.display = (limit >= total) ? 'none' : '';
+  }
+}
+function showMoreDates(){
+  dateStepIndex++;
+  updateDateVisibility();
+}
+document.addEventListener('DOMContentLoaded', updateDateVisibility);
+</script>
+{% endblock %}

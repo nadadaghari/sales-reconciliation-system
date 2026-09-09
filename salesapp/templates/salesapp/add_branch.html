@@ -1,0 +1,78 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+<div class="subnav">
+  <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' %}active{% endif %}">Users</a>
+  <a href="{% url 'add_branch' %}" class="{% if active_tab == 'branches' %}active{% endif %}">Branches</a>
+  <a href="{% url 'unlock_account' %}" class="{% if active_tab == 'unlock' %}active{% endif %}">Unlock Accounts</a>
+  <a href="{% url 'audit_log' %}" class="{% if active_tab == 'audit_log' %}active{% endif %}">Audit Log</a>
+</div>
+
+<div class="card">
+  <h3>Add Branch</h3>
+  <form method="post">
+    {% csrf_token %}
+    <div class="grid grid-2">
+      <div><label>Branch Name</label><input name="name" required></div>
+      <div><label>Branch Code (used for branch login)</label><input name="code" placeholder="e.g. AKL"></div>
+    </div>
+    <button type="submit" class="btn" style="margin-top:14px;">Add Branch</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Import Branches from CSV</h3>
+  <p style="font-size:13px; color:#8A8578; margin-top:0;">
+    CSV or tab-separated file. The system auto-detects the branch-name and code columns —
+    works with headers like <code>name,code</code> or <code>Branch / Flat Name, Code</code>.
+  </p>
+  <form method="post" action="{% url 'import_branches' %}" enctype="multipart/form-data">
+    {% csrf_token %}
+    <label>CSV file</label>
+    <input type="file" name="csv_file" accept=".csv" required>
+    <button type="submit" class="btn secondary" style="margin-top:14px;">Import</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Existing Branches ({{ branches|length }})</h3>
+  <table>
+    <thead><tr><th>Name</th><th>Code</th><th>ID</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for b in branches %}
+      <tr>
+        <td>{{ b.name }}</td>
+        <td>{{ b.code|default:"-" }}</td>
+        <td>{{ b.id }}</td>
+        <td>{% if b.is_active %}<span class="badge ok">Active</span>{% else %}<span class="badge flag">Deactivated</span>{% endif %}</td>
+        <td style="white-space:nowrap;">
+          <a href="{% url 'edit_branch' b.id %}" class="icon-btn edit" title="Edit">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </a>
+          <form method="post" action="{% url 'toggle_branch_active' b.id %}" style="display:inline;">
+            {% csrf_token %}
+            {% if b.is_active %}
+            <button type="submit" class="icon-btn pause" title="Deactivate">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            </button>
+            {% else %}
+            <button type="submit" class="icon-btn play" title="Activate">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            </button>
+            {% endif %}
+          </form>
+          <form method="post" action="{% url 'delete_branch' b.id %}" style="display:inline;" onsubmit="return confirm('Delete {{ b.name }}? This cannot be undone.');">
+            {% csrf_token %}
+            <button type="submit" class="icon-btn delete" title="Delete">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" style="color:#8A8578;">No branches yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

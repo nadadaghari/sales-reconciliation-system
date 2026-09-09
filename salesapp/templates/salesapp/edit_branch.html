@@ -1,0 +1,21 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+<div class="subnav">
+  <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' %}active{% endif %}">Users</a>
+  <a href="{% url 'add_branch' %}" class="{% if active_tab == 'branches' %}active{% endif %}">Branches</a>
+</div>
+
+<div class="card">
+  <h3>Edit Branch</h3>
+  <form method="post">
+    {% csrf_token %}
+    <div class="grid grid-2">
+      <div><label>Branch Name</label><input name="name" value="{{ branch.name }}" required></div>
+      <div><label>Branch Code (used for branch login)</label><input name="code" value="{{ branch.code }}" placeholder="e.g. AKL"></div>
+    </div>
+    <button type="submit" class="btn" style="margin-top:14px;">Save Changes</button>
+    <a href="{% url 'add_branch' %}" class="btn secondary" style="margin-left:8px; text-decoration:none; display:inline-block;">Cancel</a>
+  </form>
+</div>
+{% endblock %}
