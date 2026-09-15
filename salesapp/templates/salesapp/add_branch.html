@@ -4,7 +4,6 @@
 <div class="subnav">
   <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' %}active{% endif %}">Users</a>
   <a href="{% url 'add_branch' %}" class="{% if active_tab == 'branches' %}active{% endif %}">Branches</a>
-  <a href="{% url 'unlock_account' %}" class="{% if active_tab == 'unlock' %}active{% endif %}">Unlock Accounts</a>
   <a href="{% url 'audit_log' %}" class="{% if active_tab == 'audit_log' %}active{% endif %}">Audit Log</a>
 </div>
 
@@ -14,7 +13,7 @@
     {% csrf_token %}
     <div class="grid grid-2">
       <div><label>Branch Name</label><input name="name" required></div>
-      <div><label>Branch Code (used for branch login)</label><input name="code" placeholder="e.g. AKL"></div>
+      <div><label>Branch Code (used for branch login)</label><input name="code" placeholder="e.g. AKL" style="max-width:200px;"></div>
     </div>
     <button type="submit" class="btn" style="margin-top:14px;">Add Branch</button>
   </form>
@@ -23,19 +22,20 @@
 <div class="card">
   <h3>Import Branches from CSV</h3>
   <p style="font-size:13px; color:#8A8578; margin-top:0;">
-    CSV or tab-separated file. The system auto-detects the branch-name and code columns —
+    Excel (.xlsx) or CSV/tab-separated file. The system auto-detects the branch-name and code columns —
     works with headers like <code>name,code</code> or <code>Branch / Flat Name, Code</code>.
   </p>
   <form method="post" action="{% url 'import_branches' %}" enctype="multipart/form-data">
     {% csrf_token %}
     <label>CSV file</label>
-    <input type="file" name="csv_file" accept=".csv" required>
+    <input type="file" name="csv_file" accept=".csv,.xlsx" required>
     <button type="submit" class="btn secondary" style="margin-top:14px;">Import</button>
   </form>
 </div>
 
 <div class="card">
   <h3>Existing Branches ({{ branches|length }})</h3>
+  <div style="overflow-x:auto;">
   <table>
     <thead><tr><th>Name</th><th>Code</th><th>ID</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody>
@@ -74,5 +74,6 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endblock %}

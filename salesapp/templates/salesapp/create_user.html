@@ -4,7 +4,6 @@
 <div class="subnav">
   <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' %}active{% endif %}">Users</a>
   <a href="{% url 'add_branch' %}" class="{% if active_tab == 'branches' %}active{% endif %}">Branches</a>
-  <a href="{% url 'unlock_account' %}" class="{% if active_tab == 'unlock' %}active{% endif %}">Unlock Accounts</a>
   <a href="{% url 'audit_log' %}" class="{% if active_tab == 'audit_log' %}active{% endif %}">Audit Log</a>
 </div>
 
@@ -38,9 +37,6 @@
     <div id="waiterFields">
       <div class="grid grid-2" style="margin-bottom:4px;">
         <div><label>Head Cashier Name</label><input name="head_cashier_name" placeholder="Name"></div>
-        <div><label>Punch ID</label><input name="punch_id" placeholder="Fingerprint / attendance ID"></div>
-      </div>
-      <div class="grid grid-2" style="margin-bottom:4px;">
         <div>
           <label>Password (at least 8 characters)</label>
           <input name="waiter_password" type="password" placeholder="Set a password" minlength="8">
@@ -72,16 +68,23 @@
   <h3>Existing Users</h3>
   <div style="overflow-x:auto;">
   <table>
-    <thead><tr><th>Name / Username</th><th>Role</th><th>Punch ID</th><th>Branch</th><th>Branch Code</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Name / Username</th><th>Role</th><th>Branch</th><th>Branch Code</th><th>Actions</th></tr></thead>
     <tbody>
       {% for u in users %}
-      <tr>
+      <tr {% if u.is_locked %}style="background:#FBE9E6;"{% endif %}>
         <td>{{ u.profile.head_cashier_name|default:u.username }}</td>
         <td>{{ u.profile.get_role_display|default:"-" }}</td>
-        <td>{{ u.profile.punch_id|default:"-" }}</td>
         <td>{{ u.profile.branch.name|default:"-" }}</td>
         <td>{{ u.profile.branch.code|default:"-" }}</td>
         <td style="white-space:nowrap;">
+          {% if u.is_locked %}
+          <form method="post" action="{% url 'unlock_user' u.id %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="icon-btn pause" title="Unlock (currently locked out)" style="border-color:#B94A3F; color:#B94A3F;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+            </button>
+          </form>
+          {% endif %}
           <a href="{% url 'edit_user' u.id %}" class="icon-btn edit" title="Edit">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
           </a>
@@ -106,7 +109,7 @@
         </td>
       </tr>
       {% empty %}
-      <tr><td colspan="6" style="color:#8A8578;">No users yet</td></tr>
+      <tr><td colspan="5" style="color:#8A8578;">No users yet</td></tr>
       {% endfor %}
     </tbody>
   </table>

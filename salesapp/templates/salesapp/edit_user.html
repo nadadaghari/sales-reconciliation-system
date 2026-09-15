@@ -12,9 +12,8 @@
     {% csrf_token %}
 
     {% if profile.role == 'waiter' %}
-      <div class="grid grid-2" style="margin-bottom:12px;">
-        <div><label>Head Cashier Name</label><input name="head_cashier_name" value="{{ profile.head_cashier_name }}"></div>
-        <div><label>Punch ID</label><input name="punch_id" value="{{ profile.punch_id }}"></div>
+      <div style="margin-bottom:12px; max-width:300px;">
+        <label>Head Cashier Name</label><input name="head_cashier_name" value="{{ profile.head_cashier_name }}">
       </div>
       <div style="margin-bottom:12px; max-width:300px;">
         <label>Branch</label>

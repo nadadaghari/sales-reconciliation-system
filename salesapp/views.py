@@ -535,9 +535,6 @@ def create_user_view(request):
             if len(password) < 8:
                 messages.error(request, 'Please set a password of at least 8 characters for this waiter account.')
                 return redirect('create_user')
-            if UserProfile.objects.filter(role='waiter', branch=branch).exists():
-                messages.error(request, f'{branch.name} already has a waiter account.')
-                return redirect('create_user')
 
             base_username = f'waiter_{branch.code or branch.id}'.lower().replace(' ', '')
             username = base_username
@@ -582,9 +579,18 @@ def create_user_view(request):
         for b in Branch.objects.all()
     ]
 
+    users_list = list(User.objects.select_related('profile').order_by('username'))
+    for u in users_list:
+        profile = getattr(u, 'profile', None)
+        if profile and profile.role == 'waiter' and profile.branch and profile.branch.code:
+            key = f'login_attempts:branch:{profile.branch.code.lower()}'
+        else:
+            key = f'login_attempts:{u.username.lower()}'
+        u.is_locked = _is_locked_out(key)
+
     context = {
         'branches': branches_info,
-        'users': User.objects.select_related('profile').order_by('username'),
+        'users': users_list,
         'active_tab': 'users',
     }
     return render(request, 'salesapp/create_user.html', context)
@@ -712,11 +718,14 @@ def import_branches_view(request):
         code = str(row.get(code_col) or '').strip() if code_col else ''
         if not name:
             continue
-        _, was_created = Branch.objects.get_or_create(name=name, defaults={'code': code or None})
-        if was_created:
-            created += 1
-        else:
+        # Case-insensitive check (matches the manual "Add Branch" form's logic) —
+        # avoids near-duplicate rows like "Kucu Ibri" vs "kucu ibri" from a
+        # spreadsheet with inconsistent capitalization.
+        if Branch.objects.filter(name__iexact=name).exists():
             skipped += 1
+            continue
+        Branch.objects.create(name=name, code=code or None)
+        created += 1
 
     log_activity(request, 'branch_created', description=f'Bulk import: {created} added, {skipped} skipped')
     messages.success(request, f'Import finished: {created} branch(es) added, {skipped} already existed.')
@@ -890,9 +899,6 @@ def edit_user_view(request, user_id):
             if not head_cashier_name or not branch:
                 messages.error(request, 'Please fill in the head cashier name and select a branch.')
                 return redirect('edit_user', user_id=target.id)
-            if UserProfile.objects.filter(role='waiter', branch=branch).exclude(id=profile.id).exists():
-                messages.error(request, f'{branch.name} already has a different waiter account.')
-                return redirect('edit_user', user_id=target.id)
             if new_password and len(new_password) < 8:
                 messages.error(request, 'Password must be at least 8 characters.')
                 return redirect('edit_user', user_id=target.id)
@@ -933,30 +939,21 @@ def edit_user_view(request, user_id):
 
 
 @role_required('admin')
-def unlock_account_view(request):
-    if request.method == 'POST':
-        identifier = request.POST.get('identifier', '').strip().lower()
-        if not identifier:
-            messages.error(request, 'Please enter a username or branch code.')
-            return redirect('unlock_account')
-
-        cleared = False
-        if cache.get(f'login_attempts:{identifier}', 0) > 0:
-            cache.delete(f'login_attempts:{identifier}')
-            cleared = True
-        if cache.get(f'login_attempts:branch:{identifier}', 0) > 0:
-            cache.delete(f'login_attempts:branch:{identifier}')
-            cleared = True
-
-        if cleared:
-            log_activity(request, 'account_unlocked', description=identifier)
-            messages.success(request, f'"{identifier}" has been unlocked.')
-        else:
-            messages.error(request, f'No active lockout found for "{identifier}".')
-        return redirect('unlock_account')
-
-    context = {'active_tab': 'unlock'}
-    return render(request, 'salesapp/unlock_account.html', context)
+@require_POST
+def unlock_user_view(request, user_id):
+    """Unlock one specific account directly from the Users page — figures
+    out the right cache key itself (branch code for waiters, username for
+    everyone else) instead of asking the admin to type an identifier."""
+    target = get_object_or_404(User.objects.select_related('profile'), id=user_id)
+    profile = getattr(target, 'profile', None)
+    if profile and profile.role == 'waiter' and profile.branch and profile.branch.code:
+        key = f'login_attempts:branch:{profile.branch.code.lower()}'
+    else:
+        key = f'login_attempts:{target.username.lower()}'
+    cache.delete(key)
+    log_activity(request, 'account_unlocked', description=target.username)
+    messages.success(request, f'{target.username} has been unlocked.')
+    return redirect('create_user')
 
 
 @role_required('collector', 'audit', 'admin')
@@ -1011,7 +1008,7 @@ def waiter_history_view(request):
     profile = request.user.profile
     branch = profile.branch
 
-    qs = ShiftEntry.objects.filter(branch=branch, is_archived=False).order_by('-date', '-created_at')
+    qs = ShiftEntry.objects.select_related('collector').filter(branch=branch, is_archived=False).order_by('-date', '-created_at')
 
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()

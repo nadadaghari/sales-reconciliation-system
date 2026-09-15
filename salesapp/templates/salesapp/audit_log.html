@@ -4,7 +4,6 @@
 <div class="subnav">
   <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' %}active{% endif %}">Users</a>
   <a href="{% url 'add_branch' %}" class="{% if active_tab == 'branches' %}active{% endif %}">Branches</a>
-  <a href="{% url 'unlock_account' %}" class="{% if active_tab == 'unlock' %}active{% endif %}">Unlock Accounts</a>
   <a href="{% url 'audit_log' %}" class="{% if active_tab == 'audit_log' %}active{% endif %}">Audit Log</a>
 </div>
 

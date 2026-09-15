@@ -53,7 +53,7 @@
   {% endif %}
 
   {% for group in branch_groups %}
-  <div style="margin-top:12px; border:1px solid #E7E4DB; border-radius:10px; overflow:hidden;">
+  <div class="branch-item" data-index="{{ forloop.counter0 }}" style="margin-top:12px; border:1px solid #E7E4DB; border-radius:10px; overflow:hidden;">
     <div onclick="toggleBranchGroup('branch-group-{{ forloop.counter }}')" style="display:flex; align-items:center; gap:16px; padding:12px 16px; background:#F0EEE7; cursor:pointer; flex-wrap:wrap;">
       <span id="arrow-branch-group-{{ forloop.counter }}" style="font-size:11px; color:#1F3B4D; display:inline-block; transition:transform 0.15s;">&#9654;</span>
       <strong style="flex:0 0 160px; font-size:14px; color:#1F3B4D;">{{ group.branch.name }}</strong>
@@ -71,7 +71,7 @@
       <tbody>
         {% for e in group.entries %}
         {% if e.show_date_divider %}
-        <tr>
+        <tr data-branch="{{ forloop.parentloop.counter0 }}" data-dategroup="{{ e.date_group }}">
           <td colspan="14" style="padding:10px 8px 4px; border-bottom:none;">
             <div style="display:flex; align-items:center; gap:10px;">
               <div style="flex:1; border-top:3px solid #F0EEE7;"></div>
@@ -80,7 +80,7 @@
           </td>
         </tr>
         {% endif %}
-        <tr {% if selected_entry and selected_entry.id == e.id %}style="background:#F0EEE7;"{% endif %}>
+        <tr data-branch="{{ forloop.parentloop.counter0 }}" data-dategroup="{{ e.date_group }}" {% if selected_entry and selected_entry.id == e.id %}style="background:#F0EEE7;"{% endif %}>
           <td><strong>{{ e.reference_id }}</strong></td>
           <td>{{ e.date }}</td>
           <td>Shift {{ e.shift }}</td>
@@ -122,12 +122,74 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if group.date_group_count > 2 %}
+    <div style="padding:10px 16px;">
+      <button type="button" class="btn secondary small" id="showMoreDatesBtn-{{ forloop.counter0 }}"
+              data-branch-total="{{ group.date_group_count }}"
+              onclick="showMoreDates({{ forloop.counter0 }})">Show More Dates</button>
+    </div>
+    {% endif %}
     </div>
   </div>
   {% empty %}
   <div style="margin-top:16px; color:#8A8578; font-size:13px;">No submissions found</div>
   {% endfor %}
+  {% if branch_groups|length > 10 %}
+  <div style="margin-top:16px; text-align:center;">
+    <button type="button" class="btn secondary" id="showMoreBranchesBtn" onclick="showMoreBranches()">Show More Branches</button>
+  </div>
+  {% endif %}
 </div>
+
+<script>
+const BRANCH_STEPS = [10, 15, 20, 25];
+const DATE_STEPS = [2, 4, 7, 10];
+let branchStepIndex = 0;
+const dateStepIndex = {};
+
+function updateBranchVisibility(){
+  const items = document.querySelectorAll('.branch-item');
+  const limit = branchStepIndex < BRANCH_STEPS.length ? BRANCH_STEPS[branchStepIndex] : Infinity;
+  items.forEach(el => {
+    const idx = parseInt(el.dataset.index, 10);
+    el.style.display = idx < limit ? '' : 'none';
+  });
+  const btn = document.getElementById('showMoreBranchesBtn');
+  if(btn){
+    btn.style.display = (limit >= items.length) ? 'none' : '';
+  }
+}
+function showMoreBranches(){
+  branchStepIndex++;
+  updateBranchVisibility();
+}
+
+function updateDateVisibility(branchIdx){
+  const stepIdx = dateStepIndex[branchIdx] || 0;
+  const limit = stepIdx < DATE_STEPS.length ? DATE_STEPS[stepIdx] : Infinity;
+  document.querySelectorAll(`tr[data-branch="${branchIdx}"][data-dategroup]`).forEach(el => {
+    const dg = parseInt(el.dataset.dategroup, 10);
+    el.style.display = dg < limit ? '' : 'none';
+  });
+  const btn = document.getElementById('showMoreDatesBtn-' + branchIdx);
+  if(btn){
+    const total = parseInt(btn.dataset.branchTotal, 10);
+    btn.style.display = (limit >= total) ? 'none' : '';
+  }
+}
+function showMoreDates(branchIdx){
+  dateStepIndex[branchIdx] = (dateStepIndex[branchIdx] || 0) + 1;
+  updateDateVisibility(branchIdx);
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  updateBranchVisibility();
+  document.querySelectorAll('[id^="showMoreDatesBtn-"]').forEach(btn => {
+    const branchIdx = btn.id.replace('showMoreDatesBtn-', '');
+    updateDateVisibility(branchIdx);
+  });
+});
+</script>
 
 <script>
 function toggleBranchGroup(id){
@@ -148,6 +210,27 @@ function toggleBranchGroup(id){
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
   Back
 </a>
+
+{% if selected_entry.notes or selected_handover.notes or selected_entry.audit_notes %}
+<div class="card" style="background:#FAEEDA;">
+  <h3 style="color:#854F0B;">Notes</h3>
+  <div class="grid grid-3">
+    <div>
+      <label style="color:#854F0B; font-weight:700;">Waiter</label>
+      <div style="color:#1F3B4D; font-size:14px;">{{ selected_entry.notes|default:"—" }}</div>
+    </div>
+    <div>
+      <label style="color:#854F0B; font-weight:700;">Collector</label>
+      <div style="color:#1F3B4D; font-size:14px;">{{ selected_handover.notes|default:"—" }}</div>
+    </div>
+    <div>
+      <label style="color:#854F0B; font-weight:700;">Audit</label>
+      <div style="color:#1F3B4D; font-size:14px;">{{ selected_entry.audit_notes|default:"—" }}</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <h3>What the Waiter / Head Cashier Reported</h3>
   <div class="grid grid-4">
@@ -198,6 +281,7 @@ function toggleBranchGroup(id){
   {% endfor %}
 
   <h3 style="margin-top:20px;">Delivery & Other Reports</h3>
+  <div style="overflow-x:auto;">
   <table>
     <thead><tr><th>Source</th><th>Orders</th><th>Amount</th><th>Cancelled (Orders)</th><th>Cancelled (Amount)</th><th>Attachment</th></tr></thead>
     <tbody>
@@ -217,16 +301,8 @@ function toggleBranchGroup(id){
       {% endfor %}
     </tbody>
   </table>
-  <div class="total-strip"><span>Total Delivery</span><span>{{ selected_entry.delivery_total }} RO</span></div>
-
-  <div style="margin-top:14px;"><label>Waiter / Head Cashier Notes</label><input value="{{ selected_entry.notes|default:'-' }}" disabled></div>
-
-  {% if selected_entry.audit_notes %}
-  <div style="margin-top:14px; background:#FAEEDA; border-radius:10px; padding:12px 16px;">
-    <label style="color:#854F0B; font-weight:700;">Note from Audit</label>
-    <div style="color:#1F3B4D; font-size:14px;">{{ selected_entry.audit_notes }}</div>
   </div>
-  {% endif %}
+  <div class="total-strip"><span>Total Delivery</span><span>{{ selected_entry.delivery_total }} RO</span></div>
 
   <div class="total-strip" style="margin-top:16px;"><span>Waiter Total</span><span>{{ selected_entry.actual_total }} RO</span></div>
 </div>
