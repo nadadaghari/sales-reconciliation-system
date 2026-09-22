@@ -250,7 +250,7 @@ function toggleBranchGroup(id){
 <div class="card">
   <h3>Discount</h3>
   <div style="overflow-x:auto;">
-  <table>
+  <table class="table-2col">
     <thead><tr><th>Amount</th><th>Receipt</th></tr></thead>
     <tbody><tr>
       <td>{{ selected_entry.staff_discount }} RO</td>
@@ -288,7 +288,7 @@ function toggleBranchGroup(id){
   <div class="total-strip"><span>Combined Total Cash (OMR + AED) — net of cancellation</span><span>{{ selected_entry.cash_total }} RO</span></div>
   {% if selected_entry.cash_cancel_amount %}
   <div style="overflow-x:auto; margin-top:10px;">
-  <table>
+  <table class="table-2col">
     <thead><tr><th>Cash Cancelled Order</th><th>Receipt</th></tr></thead>
     <tbody><tr>
       <td>{{ selected_entry.cash_cancel_amount }} RO</td>
@@ -320,7 +320,7 @@ function toggleBranchGroup(id){
   <div class="total-strip" style="margin-top:10px;"><span>Total Visa — net of cancellation</span><span>{{ selected_entry.visa_total }} RO</span></div>
   {% if selected_entry.visa_cancel_amount %}
   <div style="overflow-x:auto; margin-top:10px;">
-  <table>
+  <table class="table-2col">
     <thead><tr><th>Visa Cancelled Order</th><th>Receipt</th></tr></thead>
     <tbody><tr>
       <td>{{ selected_entry.visa_cancel_amount }} RO</td>

@@ -1,46 +1,185 @@
 {% extends "salesapp/base.html" %}
 {% load static %}
 {% block content %}
-<div style="min-height:80vh; display:flex; align-items:center; justify-content:center; width:100vw; position:relative; left:50%; transform:translateX(-50%);">
-  <div style="max-width:420px; width:100%; background:#fff; border-radius:24px; padding:40px 36px; box-shadow:0 10px 40px rgba(0,0,0,0.08); text-align:center;">
-    <img src="{% static 'salesapp/logo.png' %}" alt="Logo" style="width:90px; height:auto; margin-bottom:18px;">
-    <h2 style="margin:0 0 6px; font-size:24px; font-weight:800; color:#1C1917;">Branch Login</h2>
-    <p style="margin:0 0 28px; color:#8A8578; font-size:14px;">Enter your branch details to continue</p>
+<style>
+  body:has(.login-page-shell) .layout {
+    min-height: 100vh;
+  }
+  body:has(.login-page-shell) .main-content {
+    padding: 0;
+    max-width: none;
+    margin: 0;
+    width: 100%;
+  }
+  .login-page-shell {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    box-sizing: border-box;
+  }
+  .login-card {
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+    background: #fff;
+    border: 1px solid #E7E4DB;
+    border-radius: 22px;
+    box-shadow: 0 2px 8px rgba(16, 24, 40, 0.08);
+    overflow: hidden;
+    text-align: center;
+  }
+  .login-header {
+    background: #1C1A14;
+    border-bottom: 3px solid #D9BD7D;
+    padding: 2rem;
+    text-align: center;
+  }
+  .login-header img {
+    height: 70px;
+    width: auto;
+    display: block;
+    margin: 0 auto 0.25rem;
+  }
+  .login-header h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #fff;
+    margin: 0.5rem 0 0.25rem;
+  }
+  .login-header p {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.875rem;
+    margin: 0;
+  }
+  .login-card form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 2rem 2rem 0;
+    text-align: left;
+  }
+  .login-card .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .login-card input[type="text"],
+  .login-card input[type="password"],
+  .login-card input:not([type]) {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    border: 1px solid #E7E4DB;
+    border-radius: 12px;
+    background: #fff;
+    font-size: 14px;
+    color: #1C1917;
+  }
+  .login-card .password-field input {
+    padding-right: 2.75rem;
+  }
+  .login-card input:focus {
+    outline: none;
+    border-color: #D9BD7D;
+    box-shadow: 0 0 0 3px rgba(217, 189, 125, 0.12);
+  }
+  .login-card .login-btn {
+    width: 100%;
+    background: #D9BD7D;
+    color: #0F172A;
+    border: 1px solid #D9BD7D;
+    border-radius: 999px;
+    padding: 14px;
+    font-weight: 600;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-family: inherit;
+  }
+  .login-card .login-btn:hover {
+    background: #c9a85f;
+    border-color: #c9a85f;
+  }
+  .login-footer {
+    margin-top: 24px;
+    padding: 24px 2rem 2rem;
+    border-top: 1px solid #E7E4DB;
+  }
+  @media (max-width: 640px) {
+    .login-page-shell { padding: 24px 36px; }
+    .login-card { max-width: 320px; }
+    .login-header { padding: 1.5rem 1.25rem; }
+    .login-header img { height: 48px; }
+    .login-header h1 { font-size: 1.2rem; }
+    .login-header p { font-size: 0.8rem; }
+    .login-card form { gap: 14px; padding: 18px 18px 0; }
+    .login-footer { margin-top: 18px; padding: 18px; }
+    .login-card .login-btn { padding: 10px; font-size: 14px; margin-top: 4px; }
+  }
+</style>
+<div class="login-page-shell">
+  <div class="login-card">
+    <div class="login-header">
+      <img src="{% static 'salesapp/logo.png' %}" alt="Logo">
+      <h1>Branch Login</h1>
+      <p>Enter your branch details to continue</p>
+    </div>
 
-    <form method="post" style="text-align:left;">
+    <form method="post">
       {% csrf_token %}
-      <div style="margin-bottom:18px;">
-        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:8px;">
+      <div class="form-group">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:0;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
           Branch Code
         </label>
-        <input name="branch_code" required autofocus placeholder="e.g. AKL" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:12px 18px;">
+        <input name="branch_code" type="text" required autofocus placeholder="e.g. AKL">
       </div>
-      <div style="margin-bottom:18px;">
-        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:8px;">
+      <div class="form-group">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:0;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6"/></svg>
           Punch ID
         </label>
-        <input name="punch_id" required placeholder="Your Punch ID" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:12px 18px;">
+        <input name="punch_id" type="text" required placeholder="Your Punch ID">
       </div>
-      <div style="margin-bottom:22px;">
-        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:8px;">
+      <div class="form-group">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:#1C1917; margin-bottom:0;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           Password
         </label>
-        <input name="password" type="password" required placeholder="Your branch password" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:12px 18px;">
+        <div class="password-field" style="position:relative;">
+          <input name="password" type="password" id="passwordInput" required placeholder="Your branch password">
+          <button type="button" onclick="togglePassword()" style="position:absolute; right:0.75rem; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; padding:0; display:inline-flex; align-items:center; justify-content:center; color:#9ca3af;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
-      <button type="submit" style="width:100%; background:#D4A843; color:#1C1917; border:none; border-radius:24px; padding:14px; font-weight:700; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+      <button type="submit" class="login-btn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
         Login
       </button>
     </form>
 
-    <p style="margin:22px 0 0; font-size:12px; color:#B8B4AA;">Secure access for authorized personnel only</p>
-    <div style="margin-top:14px; text-align:center;">
+    <div class="login-footer">
+      <p style="margin:0 0 8px; font-size:12px; color:#B8B4AA;">Secure access for authorized personnel only</p>
       <a href="{% url 'staff_login' %}" style="font-size:13px; color:#8A8578;">Collector / Audit / Admin login</a>
     </div>
   </div>
 </div>
+<script>
+function togglePassword(){
+  const input = document.getElementById('passwordInput');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+</script>
 {% endblock %}
