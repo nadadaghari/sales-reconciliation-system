@@ -43,6 +43,8 @@
   .card h3 { margin:0 0 14px; font-size:16px; font-weight:700; color:#1F3B4D; }
   label { display:block; font-size:13px; color:#5C5A52; margin-bottom:4px; }
   input, select, textarea { width:100%; padding:9px 10px; border:1px solid #D8D5CB; border-radius:8px; font-family:'Inter',sans-serif; font-size:14px; background:#FBFAF7; box-sizing:border-box; max-width:100%; }
+  input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+  input[type=number] { -moz-appearance:textfield; }
   select, input[type="date"], input[type="text"], input[type="password"], input[type="search"], input:not([type]) { max-width:280px; }
   input:focus, select:focus, textarea:focus { outline:none; border-color:#D4A843; }
   .grid { display:grid; gap:12px; }
@@ -222,6 +224,15 @@
 function toggleSidebar(){
   document.body.classList.toggle('sidebar-expanded');
 }
+
+// Scrolling the mouse wheel over a focused number field silently changes its
+// value in most browsers — a frequent source of wrong entries. Blur the
+// field instead, so the page scrolls normally and the number stays put.
+document.addEventListener('wheel', function(e){
+  if(document.activeElement && document.activeElement.type === 'number'){
+    document.activeElement.blur();
+  }
+}, { passive: true });
 
 // Replace the browser's default "No file chosen" text on every file input
 // with a compact custom button + filename, site-wide. Callable again after

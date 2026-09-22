@@ -16,6 +16,9 @@
         <label>Head Cashier Name</label><input name="head_cashier_name" value="{{ profile.head_cashier_name }}">
       </div>
       <div style="margin-bottom:12px; max-width:300px;">
+        <label>Punch ID (unique per branch)</label><input name="punch_id" value="{{ profile.punch_id }}">
+      </div>
+      <div style="margin-bottom:12px; max-width:300px;">
         <label>Branch</label>
         <select name="branch">
           {% for b in branches %}

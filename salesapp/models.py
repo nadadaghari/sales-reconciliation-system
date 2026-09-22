@@ -87,6 +87,7 @@ class ShiftEntry(models.Model):
     reference_id = models.CharField(max_length=40, unique=True, blank=True)
 
     staff_discount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+    staff_discount_attachment = models.FileField(upload_to='discount_attachments/%Y/%m/', blank=True, null=True)
     petty_cash = models.DecimalField(max_digits=10, decimal_places=3, default=0)
 
     # {"0.05": 4, "0.1": 5, ...} — OMR cash counted.
@@ -96,10 +97,16 @@ class ShiftEntry(models.Model):
     aed_exchange_rate = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.1000'))
     # Combined OMR total — OMR cash counted + (AED cash counted × aed_exchange_rate).
     cash_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    # A cancelled/refunded cash transaction — deducted directly from the final total.
+    cash_cancel_amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+    cash_cancel_attachment = models.FileField(upload_to='cancel_attachments/%Y/%m/', blank=True, null=True)
 
     # [{"serial": "10026512", "amount": 66.4}, ...] — per-machine receipt files live in VisaMachineFile.
     visa_entries = models.JSONField(default=list, blank=True)
     visa_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    # A cancelled/refunded visa transaction — deducted directly from the final total.
+    visa_cancel_amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+    visa_cancel_attachment = models.FileField(upload_to='cancel_attachments/%Y/%m/', blank=True, null=True)
 
     # {"talabat": {"orders": 60, "amount": 239.52, "cancel_orders": 0, "cancel_amount": 0}, ...}
     delivery_data = models.JSONField(default=dict, blank=True)
@@ -109,12 +116,17 @@ class ShiftEntry(models.Model):
     delivery_attachment_tmdone = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
     delivery_attachment_khedmah = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
     delivery_attachment_callcenter = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
+    # A cancelled delivery order from a specific company — deducted directly from the final total.
+    delivery_cancel_source = models.CharField(max_length=20, choices=DELIVERY_SOURCES, blank=True)
+    delivery_cancel_amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+    delivery_cancel_attachment = models.FileField(upload_to='cancel_attachments/%Y/%m/', blank=True, null=True)
 
     actual_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     expected_foodics = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     variance = models.DecimalField(max_digits=12, decimal_places=3, default=0)
 
     notes = models.TextField(blank=True)
+    notes_attachment = models.FileField(upload_to='notes_attachments/%Y/%m/', blank=True, null=True)
     audit_notes = models.TextField(blank=True)
     is_audited = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
@@ -127,14 +139,26 @@ class ShiftEntry(models.Model):
         return getattr(self, f'delivery_attachment_{key}', None)
 
     def recalculate(self):
-        """Server-side auto-calculation — never trust client-side totals."""
+        """Server-side auto-calculation — never trust client-side totals.
+        Each section's own cancellation is deducted directly from that
+        section's total (cash_total, visa_total, delivery_total are all
+        stored net of their cancellation). The discount then comes off the
+        combined total last, giving actual_total — the one figure used
+        everywhere downstream (collector comparison, audit variance)."""
         omr_cash = _cash_total_from_counts(self.cash_counts)
         aed_cash = _aed_cash_total_from_counts(self.cash_counts_aed)
         rate = Decimal(str(self.aed_exchange_rate or 0))
-        self.cash_total = omr_cash + (aed_cash * rate)
-        self.visa_total = _visa_total_from_entries(self.visa_entries)
-        self.delivery_total = _delivery_total_from_data(self.delivery_data)
-        self.actual_total = self.cash_total + self.visa_total + self.delivery_total
+        gross_cash = omr_cash + (aed_cash * rate)
+        self.cash_total = gross_cash - Decimal(str(self.cash_cancel_amount or 0))
+
+        gross_visa = _visa_total_from_entries(self.visa_entries)
+        self.visa_total = gross_visa - Decimal(str(self.visa_cancel_amount or 0))
+
+        gross_delivery = _delivery_total_from_data(self.delivery_data)
+        self.delivery_total = gross_delivery - Decimal(str(self.delivery_cancel_amount or 0))
+
+        actual_before_discount = self.cash_total + self.visa_total + self.delivery_total
+        self.actual_total = actual_before_discount - Decimal(str(self.staff_discount or 0))
         self.variance = self.actual_total - Decimal(str(self.expected_foodics or 0))
 
     def save(self, *args, **kwargs):

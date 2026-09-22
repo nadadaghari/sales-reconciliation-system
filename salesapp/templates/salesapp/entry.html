@@ -53,6 +53,14 @@
   </div>
 
   <div class="card">
+    <h3>Discount</h3>
+    <div class="grid grid-2">
+      <div><label>Discount Amount</label><input name="discount_amount" type="number" step="0.001" value="0" class="calc-input" id="discountAmount"></div>
+      <div><label>Receipt (photo/PDF)</label><input type="file" name="discount_attachment" accept="image/*,.pdf"></div>
+    </div>
+  </div>
+
+  <div class="card">
     <h3>Cash Report</h3>
     <div style="margin-bottom:14px;">
       <label style="display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:0;">
@@ -93,6 +101,13 @@
     </div>
 
     <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span id="cashTotalDisplay">0.000 RO</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount (after cancellation)</span><span id="cashActualDisplay">0.000 RO</span></div>
+
+    <h3 style="margin-top:20px; font-size:14px;">Cash Cancelled Order (if any) — auto-deducted</h3>
+    <div class="grid grid-2">
+      <div><label>Cancelled Amount</label><input name="cash_cancel_amount" type="number" step="0.001" value="0" class="calc-input" id="cashCancelAmount"></div>
+      <div><label>Receipt (photo/PDF)</label><input type="file" name="cash_cancel_attachment" accept="image/*,.pdf"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -100,6 +115,13 @@
     <div id="visaRows"></div>
     <button type="button" class="btn secondary small" onclick="addVisaRow()">+ Add Machine</button>
     <div class="total-strip"><span>Total Visa</span><span id="visaTotalDisplay">0.000</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Visa Actual Amount (after cancellation)</span><span id="visaActualDisplay">0.000 RO</span></div>
+
+    <h3 style="margin-top:20px; font-size:14px;">Visa Cancelled Order (if any) — auto-deducted</h3>
+    <div class="grid grid-2">
+      <div><label>Cancelled Amount</label><input name="visa_cancel_amount" type="number" step="0.001" value="0" class="calc-input" id="visaCancelAmount"></div>
+      <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_cancel_attachment" accept="image/*,.pdf"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -122,16 +144,33 @@
     </table>
     </div>
     <div class="total-strip"><span>Total Delivery</span><span id="deliveryTotalDisplay">0.000</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Delivery Actual Amount (after cancellation)</span><span id="deliveryActualDisplay">0.000 RO</span></div>
+
+    <h3 style="margin-top:20px; font-size:14px;">Delivery Cancelled Order (if any) — auto-deducted</h3>
+    <div class="grid grid-3">
+      <div>
+        <label>Delivery Company</label>
+        <select name="delivery_cancel_source">
+          <option value="">— Select —</option>
+          {% for key, label in delivery_sources %}
+            <option value="{{ key }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div><label>Cancelled Amount</label><input name="delivery_cancel_amount" type="number" step="0.001" value="0" class="calc-input" id="deliveryCancelAmount"></div>
+      <div><label>Receipt (photo/PDF)</label><input type="file" name="delivery_cancel_attachment" accept="image/*,.pdf"></div>
+    </div>
   </div>
 
   <div class="card">
-    <h3>Reconciliation with Foodics</h3>
-    <div class="grid grid-2">
-      <div><label>Actual Total (auto-calculated)</label><input id="actualDisplay" disabled></div>
-      <div><label>Expected from Foodics (manual for now)</label><input name="expected_foodics" type="number" step="0.001" value="0" class="calc-input" id="expected"></div>
+    <h3>Summary</h3>
+    <div class="total-strip"><span>Actual</span><span id="actualDisplay">0.000 RO</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Actual with Discount</span><span id="actualWithDiscountDisplay">0.000 RO</span></div>
+    <div style="margin-top:14px;">
+      <label>Notes</label>
+      <textarea name="notes" rows="4" style="max-width:100%;" placeholder="Anything the collector or audit should know about this shift..."></textarea>
     </div>
-    <div class="total-strip" id="varianceStrip"><span>Variance</span><span id="varianceDisplay">0.000</span></div>
-    <div style="margin-top:12px;"><label>Notes</label><input name="notes" placeholder="Optional"></div>
+    <div style="margin-top:12px;"><label>Attach Photo / PDF (optional)</label><input type="file" name="notes_attachment" accept="image/*,.pdf"></div>
   </div>
 
   <button type="submit" class="btn">Submit</button>
@@ -140,7 +179,6 @@
 <script>
 const DENOMS = {{ denoms|safe }};
 const AED_DENOMS = {{ aed_denoms|safe }};
-const THRESHOLD = 5;
 let visaCount = 0;
 
 function toggleAedSection(){
@@ -194,24 +232,31 @@ function calcAll(){
   document.getElementById('cashAedInOmrDisplay').textContent = cashAedInOmr.toFixed(3) + ' RO';
 
   const cashTotal = cashOmr + cashAedInOmr;
+  const cashCancel = parseFloat(document.getElementById('cashCancelAmount').value) || 0;
+  const netCash = cashTotal - cashCancel;
   document.getElementById('cashTotalDisplay').textContent = cashTotal.toFixed(3) + ' RO';
+  document.getElementById('cashActualDisplay').textContent = netCash.toFixed(3) + ' RO';
 
   let visaTotal = 0;
   document.querySelectorAll('[name="visa_amount[]"]').forEach(inp => visaTotal += (parseFloat(inp.value)||0));
+  const visaCancel = parseFloat(document.getElementById('visaCancelAmount').value) || 0;
+  const netVisa = visaTotal - visaCancel;
   document.getElementById('visaTotalDisplay').textContent = visaTotal.toFixed(3) + ' RO';
+  document.getElementById('visaActualDisplay').textContent = netVisa.toFixed(3) + ' RO';
 
   let deliveryTotal = 0;
   document.querySelectorAll('[data-del]').forEach(inp => deliveryTotal += (parseFloat(inp.value)||0));
+  const deliveryCancel = parseFloat(document.getElementById('deliveryCancelAmount').value) || 0;
+  const netDelivery = deliveryTotal - deliveryCancel;
   document.getElementById('deliveryTotalDisplay').textContent = deliveryTotal.toFixed(3) + ' RO';
+  document.getElementById('deliveryActualDisplay').textContent = netDelivery.toFixed(3) + ' RO';
 
-  const actual = cashTotal + visaTotal + deliveryTotal;
-  document.getElementById('actualDisplay').value = actual.toFixed(3) + ' RO';
+  const discount = parseFloat(document.getElementById('discountAmount').value) || 0;
 
-  const expected = parseFloat(document.getElementById('expected').value) || 0;
-  const variance = actual - expected;
-  document.getElementById('varianceDisplay').textContent = variance.toFixed(3) + ' RO';
-  const strip = document.getElementById('varianceStrip');
-  strip.classList.toggle('flag', Math.abs(variance) > THRESHOLD);
+  const actual = netCash + netVisa + netDelivery;
+  const actualWithDiscount = actual - discount;
+  document.getElementById('actualDisplay').textContent = actual.toFixed(3) + ' RO';
+  document.getElementById('actualWithDiscountDisplay').textContent = actualWithDiscount.toFixed(3) + ' RO';
 }
 
 document.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));

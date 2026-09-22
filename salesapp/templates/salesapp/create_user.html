@@ -37,6 +37,9 @@
     <div id="waiterFields">
       <div class="grid grid-2" style="margin-bottom:4px;">
         <div><label>Head Cashier Name</label><input name="head_cashier_name" placeholder="Name"></div>
+        <div><label>Punch ID (unique per branch)</label><input name="punch_id" placeholder="e.g. 12"></div>
+      </div>
+      <div class="grid grid-2" style="margin-bottom:4px;">
         <div>
           <label>Password (at least 8 characters)</label>
           <input name="waiter_password" type="password" placeholder="Set a password" minlength="8">
@@ -68,7 +71,7 @@
   <h3>Existing Users</h3>
   <div style="overflow-x:auto;">
   <table>
-    <thead><tr><th>Name / Username</th><th>Role</th><th>Branch</th><th>Branch Code</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Name / Username</th><th>Role</th><th>Branch</th><th>Branch Code</th><th>Punch ID</th><th>Actions</th></tr></thead>
     <tbody>
       {% for u in users %}
       <tr {% if u.is_locked %}style="background:#FBE9E6;"{% endif %}>
@@ -76,6 +79,7 @@
         <td>{{ u.profile.get_role_display|default:"-" }}</td>
         <td>{{ u.profile.branch.name|default:"-" }}</td>
         <td>{{ u.profile.branch.code|default:"-" }}</td>
+        <td>{{ u.profile.punch_id|default:"-" }}</td>
         <td style="white-space:nowrap;">
           {% if u.is_locked %}
           <form method="post" action="{% url 'unlock_user' u.id %}" style="display:inline;">
@@ -109,7 +113,7 @@
         </td>
       </tr>
       {% empty %}
-      <tr><td colspan="5" style="color:#8A8578;">No users yet</td></tr>
+      <tr><td colspan="6" style="color:#8A8578;">No users yet</td></tr>
       {% endfor %}
     </tbody>
   </table>

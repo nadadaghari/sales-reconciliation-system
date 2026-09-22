@@ -57,7 +57,7 @@
     <div onclick="toggleBranchGroup('branch-group-{{ forloop.counter }}')" style="display:flex; align-items:center; gap:16px; padding:12px 16px; background:#F0EEE7; cursor:pointer; flex-wrap:wrap;">
       <span id="arrow-branch-group-{{ forloop.counter }}" style="font-size:11px; color:#1F3B4D; display:inline-block; transition:transform 0.15s;">&#9654;</span>
       <strong style="flex:0 0 160px; font-size:14px; color:#1F3B4D;">{{ group.branch.name }}</strong>
-      <span style="font-size:12px; margin-left:auto; {% if group.total_variance != 0 %}color:#B94A3F;{% else %}color:#2E7D5B;{% endif %}">Variance <strong>{{ group.total_variance|floatformat:3 }}</strong></span>
+      <span style="font-size:12px; margin-left:auto; color:#1F3B4D;">Cash Amount <strong>{{ group.total_cash|floatformat:3 }}</strong></span>
     </div>
     <div id="branch-group-{{ forloop.counter }}" style="display:none; overflow-x:auto;">
     <table style="margin:0;">
@@ -211,13 +211,14 @@ function toggleBranchGroup(id){
   Back
 </a>
 
-{% if selected_entry.notes or selected_handover.notes or selected_entry.audit_notes %}
+{% if selected_entry.notes or selected_entry.notes_attachment or selected_handover.notes or selected_entry.audit_notes %}
 <div class="card" style="background:#FAEEDA;">
   <h3 style="color:#854F0B;">Notes</h3>
   <div class="grid grid-3">
     <div>
       <label style="color:#854F0B; font-weight:700;">Waiter</label>
       <div style="color:#1F3B4D; font-size:14px;">{{ selected_entry.notes|default:"—" }}</div>
+      {% if selected_entry.notes_attachment %}<div style="margin-top:6px;"><a href="{{ selected_entry.notes_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 Attachment</a></div>{% endif %}
     </div>
     <div>
       <label style="color:#854F0B; font-weight:700;">Collector</label>
@@ -232,7 +233,7 @@ function toggleBranchGroup(id){
 {% endif %}
 
 <div class="card">
-  <h3>What the Waiter / Head Cashier Reported</h3>
+  <h3>Shift Details</h3>
   <div class="grid grid-4">
     <div><label>Submit Request No.</label><input value="{{ selected_entry.reference_id }}" disabled></div>
     <div><label>Branch</label><input value="{{ selected_entry.branch.name }}" disabled></div>
@@ -243,8 +244,25 @@ function toggleBranchGroup(id){
     <div><label>Accountant / Head Cashier</label><input value="{{ selected_entry.accountant|default:'-' }}" disabled></div>
     <div><label>Submitted At</label><input value="{{ selected_entry.created_at }}" disabled></div>
   </div>
+</div>
 
-  <h3 style="margin-top:20px;">Cash Report — OMR</h3>
+{% if selected_entry.staff_discount %}
+<div class="card">
+  <h3>Discount</h3>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead><tr><th>Amount</th><th>Receipt</th></tr></thead>
+    <tbody><tr>
+      <td>{{ selected_entry.staff_discount }} RO</td>
+      <td>{% if selected_entry.staff_discount_attachment %}<a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
+    </tr></tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Cash Report — OMR</h3>
   <div class="grid grid-2" style="margin-bottom:10px;">
     <div><label>Petty Cash Amount</label><input value="{{ selected_entry.petty_cash }}" disabled></div>
   </div>
@@ -267,20 +285,54 @@ function toggleBranchGroup(id){
   {% endfor %}
   {% endif %}
 
-  <div class="total-strip"><span>Combined Total Cash (OMR + AED)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+  <div class="total-strip"><span>Combined Total Cash (OMR + AED) — net of cancellation</span><span>{{ selected_entry.cash_total }} RO</span></div>
+  {% if selected_entry.cash_cancel_amount %}
+  <div style="overflow-x:auto; margin-top:10px;">
+  <table>
+    <thead><tr><th>Cash Cancelled Order</th><th>Receipt</th></tr></thead>
+    <tbody><tr>
+      <td>{{ selected_entry.cash_cancel_amount }} RO</td>
+      <td>{% if selected_entry.cash_cancel_attachment %}<a href="{{ selected_entry.cash_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
+    </tr></tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
 
-  <h3 style="margin-top:20px;">Visa Report</h3>
-  {% for v in selected_entry.visa_entries %}
-    <div class="denom-row"><div style="flex:1;">{{ v.serial|default:"-" }}</div><div>{{ v.amount|floatformat:3 }} RO</div></div>
-  {% empty %}
-    <div style="color:#8A8578; font-size:13px;">No visa machines recorded.</div>
-  {% endfor %}
-  <div class="total-strip"><span>Total Visa</span><span>{{ selected_entry.visa_total }} RO</span></div>
-  {% for vf in selected_entry.visa_files.all %}
-    <div style="margin-top:6px;"><a href="{{ vf.file.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 {{ vf.serial|default:"Machine" }} receipt</a></div>
-  {% endfor %}
+<div class="card">
+  <h3>Visa Report</h3>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead><tr><th>Serial</th><th>Amount</th><th>Receipt</th></tr></thead>
+    <tbody>
+      {% for row in entry_visa_rows %}
+      <tr>
+        <td>{{ row.serial|default:"-" }}</td>
+        <td>{{ row.amount|floatformat:3 }} RO</td>
+        <td>{% if row.file %}<a href="{{ row.file.file.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" style="color:#8A8578;">No visa machines recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="total-strip" style="margin-top:10px;"><span>Total Visa — net of cancellation</span><span>{{ selected_entry.visa_total }} RO</span></div>
+  {% if selected_entry.visa_cancel_amount %}
+  <div style="overflow-x:auto; margin-top:10px;">
+  <table>
+    <thead><tr><th>Visa Cancelled Order</th><th>Receipt</th></tr></thead>
+    <tbody><tr>
+      <td>{{ selected_entry.visa_cancel_amount }} RO</td>
+      <td>{% if selected_entry.visa_cancel_attachment %}<a href="{{ selected_entry.visa_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
+    </tr></tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
 
-  <h3 style="margin-top:20px;">Delivery & Other Reports</h3>
+<div class="card">
+  <h3>Delivery & Other Reports</h3>
   <div style="overflow-x:auto;">
   <table>
     <thead><tr><th>Source</th><th>Orders</th><th>Amount</th><th>Cancelled (Orders)</th><th>Cancelled (Amount)</th><th>Attachment</th></tr></thead>
@@ -302,9 +354,25 @@ function toggleBranchGroup(id){
     </tbody>
   </table>
   </div>
-  <div class="total-strip"><span>Total Delivery</span><span>{{ selected_entry.delivery_total }} RO</span></div>
+  <div class="total-strip" style="margin-top:10px;"><span>Total Delivery — net of cancellation</span><span>{{ selected_entry.delivery_total }} RO</span></div>
+  {% if selected_entry.delivery_cancel_amount %}
+  <div style="overflow-x:auto; margin-top:10px;">
+  <table>
+    <thead><tr><th>Delivery Cancelled Order</th><th>Company</th><th>Receipt</th></tr></thead>
+    <tbody><tr>
+      <td>{{ selected_entry.delivery_cancel_amount }} RO</td>
+      <td>{{ selected_entry.get_delivery_cancel_source_display|default:selected_entry.delivery_cancel_source }}</td>
+      <td>{% if selected_entry.delivery_cancel_attachment %}<a href="{{ selected_entry.delivery_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
+    </tr></tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
 
-  <div class="total-strip" style="margin-top:16px;"><span>Waiter Total</span><span>{{ selected_entry.actual_total }} RO</span></div>
+<div class="card">
+  <h3>Summary</h3>
+  <div class="total-strip"><span>Actual (before discount)</span><span>{{ selected_entry.actual_total|add:selected_entry.staff_discount }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px;"><span>Actual with Discount</span><span>{{ selected_entry.actual_total }} RO</span></div>
 </div>
 
 <form method="post">
@@ -343,7 +411,7 @@ function toggleBranchGroup(id){
     <div class="total-strip"><span>Collector Total</span><span id="cActualDisplay">0.000</span></div>
     <div class="total-strip" id="diffWaiterStrip"><span>Variance (Collector - Waiter)</span><span id="diffWaiterDisplay">0.000</span></div>
     <div class="total-strip" id="diffExpectedStrip"><span>Variance (Collector - Foodics Expected)</span><span id="diffExpectedDisplay">0.000</span></div>
-    <div style="margin-top:12px;"><label>Collector Notes</label><input name="notes" value="{{ selected_handover.notes|default:'' }}"></div>
+    <div style="margin-top:12px;"><label>Collector Notes</label><input name="notes" style="max-width:100%;" value="{{ selected_handover.notes|default:'' }}"></div>
     <button type="submit" class="btn" style="margin-top:14px;">Save Collector Handover</button>
     <a href="{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="btn secondary" style="margin-top:14px; margin-left:8px; text-decoration:none; display:inline-block;">Back</a>
   </div>

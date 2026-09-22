@@ -19,15 +19,15 @@
     <thead>
       <tr>
         <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Accountant</th>
-        <th>Cash</th><th>Visa</th><th>Delivery</th><th>Actual</th><th>Expected from Foodics</th><th>Variance</th>
-        <th>Status</th><th>Notes</th>
+        <th>Cash</th><th>Visa</th><th>Delivery</th><th>Actual</th>
+        <th>Status</th><th>Notes</th><th>History</th>
       </tr>
     </thead>
     <tbody>
       {% for row in rows %}
       {% if row.show_date_divider %}
       <tr data-dategroup="{{ row.date_group }}">
-        <td colspan="12" style="padding:10px 8px 4px; border-bottom:none;">
+        <td colspan="11" style="padding:10px 8px 4px; border-bottom:none;">
           <div style="display:flex; align-items:center; gap:10px;">
             <div style="flex:1; border-top:3px solid #F0EEE7;"></div>
             <strong style="font-size:12px; color:#1F3B4D; white-space:nowrap;">{{ row.entry.date }}</strong>
@@ -44,8 +44,6 @@
         <td>{{ row.entry.visa_total|floatformat:3 }}</td>
         <td>{{ row.entry.delivery_total|floatformat:3 }}</td>
         <td>{{ row.entry.actual_total|floatformat:3 }}</td>
-        <td>{{ row.entry.expected_foodics|floatformat:3 }}</td>
-        <td style="{% if row.entry.variance != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.variance|floatformat:3 }}</td>
         <td>
           {% if row.simple_status == 'audited' %}
             <span class="badge ok">Audited</span>
@@ -60,9 +58,14 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
           </button>
         </td>
+        <td>
+          <button type="button" class="icon-btn edit" title="View change history" onclick="toggleNotes('history-{{ row.entry.id }}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </button>
+        </td>
       </tr>
       <tr id="notes-{{ row.entry.id }}" data-dategroup="{{ row.date_group }}" style="display:none;">
-        <td colspan="12" style="background:#FAEEDA;">
+        <td colspan="11" style="background:#FAEEDA;">
           <div class="grid grid-3">
             <div>
               <label style="color:#854F0B; font-weight:700;">Waiter</label>
@@ -79,8 +82,28 @@
           </div>
         </td>
       </tr>
+      <tr id="history-{{ row.entry.id }}" data-dategroup="{{ row.date_group }}" style="display:none;">
+        <td colspan="11" style="background:#F0EEE7;">
+          {% if row.history %}
+          <table style="margin:0;">
+            <thead><tr><th>When</th><th>Who</th><th>Action</th></tr></thead>
+            <tbody>
+              {% for log in row.history %}
+              <tr>
+                <td>{{ log.created_at|date:"Y-m-d H:i" }}</td>
+                <td>{{ log.username_snapshot|default:"-" }}</td>
+                <td>{{ log.get_action_display }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div style="color:#8A8578; font-size:13px;">No collector or audit action recorded yet for this shift.</div>
+          {% endif %}
+        </td>
+      </tr>
       {% empty %}
-      <tr><td colspan="12" style="color:#8A8578;">No submissions found for this branch yet.</td></tr>
+      <tr><td colspan="11" style="color:#8A8578;">No submissions found for this branch yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

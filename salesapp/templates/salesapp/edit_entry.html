@@ -37,7 +37,41 @@
 
     <div class="grid grid-2" style="margin-bottom:14px;">
       <div><label>Staff Discount / Coupons</label><input name="staff_discount" type="number" step="0.001" value="{{ entry.staff_discount }}" class="calc-input"></div>
+      <div><label>Discount Receipt (photo/PDF)</label>
+        {% if entry.staff_discount_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.staff_discount_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
+        <input type="file" name="discount_attachment" accept="image/*,.pdf">
+      </div>
+    </div>
+    <div class="grid grid-2" style="margin-bottom:14px;">
       <div><label>Petty Cash Amount</label><input name="petty_cash" type="number" step="0.001" value="{{ entry.petty_cash }}"></div>
+    </div>
+    <div class="grid grid-4" style="margin-bottom:14px;">
+      <div><label>Cash Cancel Amount</label><input name="cash_cancel_amount" type="number" step="0.001" value="{{ entry.cash_cancel_amount }}" class="calc-input"></div>
+      <div><label>Cash Cancel Receipt</label>
+        {% if entry.cash_cancel_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.cash_cancel_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
+        <input type="file" name="cash_cancel_attachment" accept="image/*,.pdf">
+      </div>
+      <div><label>Visa Cancel Amount</label><input name="visa_cancel_amount" type="number" step="0.001" value="{{ entry.visa_cancel_amount }}" class="calc-input"></div>
+      <div><label>Visa Cancel Receipt</label>
+        {% if entry.visa_cancel_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.visa_cancel_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
+        <input type="file" name="visa_cancel_attachment" accept="image/*,.pdf">
+      </div>
+    </div>
+    <div class="grid grid-3" style="margin-bottom:14px;">
+      <div>
+        <label>Delivery Cancel Company</label>
+        <select name="delivery_cancel_source">
+          <option value="">— Select —</option>
+          {% for key, label in delivery_sources %}
+            <option value="{{ key }}" {% if entry.delivery_cancel_source == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div><label>Delivery Cancel Amount</label><input name="delivery_cancel_amount" type="number" step="0.001" value="{{ entry.delivery_cancel_amount }}" class="calc-input"></div>
+      <div><label>Delivery Cancel Receipt</label>
+        {% if entry.delivery_cancel_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.delivery_cancel_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
+        <input type="file" name="delivery_cancel_attachment" accept="image/*,.pdf">
+      </div>
     </div>
     <div class="grid grid-2" style="margin-bottom:14px;">
       <div class="aed-col" style="display:none;">
@@ -120,7 +154,14 @@
       <div><label>Expected from Foodics</label><input name="expected_foodics" type="number" step="0.001" value="{{ entry.expected_foodics }}" class="calc-input" id="expected"></div>
     </div>
     <div class="total-strip" id="varianceStrip"><span>Variance</span><span id="varianceDisplay">0.000</span></div>
-    <div style="margin-top:12px;"><label>Notes</label><input name="notes" value="{{ entry.notes }}"></div>
+    <div style="margin-top:12px;">
+      <label>Notes</label>
+      <textarea name="notes" rows="3" style="max-width:100%;">{{ entry.notes }}</textarea>
+    </div>
+    <div style="margin-top:12px;"><label>Notes Attachment</label>
+      {% if entry.notes_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.notes_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
+      <input type="file" name="notes_attachment" accept="image/*,.pdf">
+    </div>
   </div>
 
   <button type="submit" class="btn">Save Changes</button>

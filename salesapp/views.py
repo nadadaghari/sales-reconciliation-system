@@ -43,16 +43,17 @@ def login_view(request):
 
 
 def branch_login_view(request):
-    """Login for branch waiters: branch code + a real password (not a raw
-    2-digit guess). The password is checked against the account's hashed
-    password (Django's PBKDF2 hasher), and repeated failures are rate-limited
-    below — closing the old "100 combinations, no hashing" brute-force risk."""
+    """Login for branch waiters: branch code + Punch ID (identifies *which*
+    waiter at that branch — a branch can now have several, one per shift) +
+    a real password (hashed, not a raw 2-digit guess). Repeated failures are
+    rate-limited below."""
     if request.user.is_authenticated:
         return _redirect_for_role(request.user)
     if request.method == 'POST':
         branch_code = request.POST.get('branch_code', '').strip()
+        punch_id = request.POST.get('punch_id', '').strip()
         password = request.POST.get('password', '')
-        cache_key = f'login_attempts:branch:{branch_code.lower()}'
+        cache_key = f'login_attempts:branch:{branch_code.lower()}:{punch_id.lower()}'
 
         if _is_locked_out(cache_key):
             messages.error(request, 'Too many failed attempts. Please wait a few minutes and try again.')
@@ -62,15 +63,17 @@ def branch_login_view(request):
         if not branch:
             _register_failed_attempt(cache_key)
             log_activity(request, 'login_failed', description=f'branch code: {branch_code}')
-            messages.error(request, 'Invalid branch code or password.')
+            messages.error(request, 'Invalid branch code, Punch ID, or password.')
             return redirect('login')
         if not branch.is_active:
             messages.error(request, 'This branch is deactivated. Contact your admin.')
             return redirect('login')
 
-        profile = UserProfile.objects.filter(role='waiter', branch=branch).select_related('user').first()
+        profile = UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=punch_id).select_related('user').first()
         if not profile:
-            messages.error(request, 'No waiter account is set up for this branch yet. Contact your admin.')
+            _register_failed_attempt(cache_key)
+            log_activity(request, 'login_failed', description=f'branch code: {branch_code}, punch id: {punch_id}')
+            messages.error(request, 'Invalid branch code, Punch ID, or password.')
             return redirect('login')
         if not profile.user.is_active:
             messages.error(request, 'This account is deactivated. Contact your admin.')
@@ -78,8 +81,8 @@ def branch_login_view(request):
 
         if not profile.user.check_password(password):
             _register_failed_attempt(cache_key)
-            log_activity(request, 'login_failed', description=f'branch code: {branch_code}', username_override=profile.user.username)
-            messages.error(request, 'Invalid branch code or password.')
+            log_activity(request, 'login_failed', description=f'branch code: {branch_code}, punch id: {punch_id}', username_override=profile.user.username)
+            messages.error(request, 'Invalid branch code, Punch ID, or password.')
             return redirect('login')
 
         _clear_attempts(cache_key)
@@ -136,6 +139,24 @@ def _register_failed_attempt(cache_key):
 
 def _clear_attempts(cache_key):
     cache.delete(cache_key)
+
+
+def _build_visa_rows(entry):
+    """Pairs each visa_entries[] row with its matching VisaMachineFile (by
+    serial) so the template can show serial + amount + receipt in one table
+    row instead of two separate, hard-to-match lists."""
+    files_by_serial = {}
+    for vf in entry.visa_files.all():
+        files_by_serial.setdefault(vf.serial, vf)
+    rows = []
+    for v in entry.visa_entries or []:
+        serial = v.get('serial', '')
+        rows.append({
+            'serial': serial,
+            'amount': v.get('amount', 0),
+            'file': files_by_serial.get(serial),
+        })
+    return rows
 
 
 def _client_ip(request):
@@ -215,14 +236,29 @@ def entry_view(request):
             shift=shift,
             accountant=accountant,
             petty_cash=_dec(request.POST.get('petty_cash')),
+            staff_discount=_dec(request.POST.get('discount_amount')),
             cash_counts=cash_counts,
             cash_counts_aed=cash_counts_aed,
             aed_exchange_rate=aed_exchange_rate,
             visa_entries=visa_entries,
+            cash_cancel_amount=_dec(request.POST.get('cash_cancel_amount')),
+            visa_cancel_amount=_dec(request.POST.get('visa_cancel_amount')),
             delivery_data=delivery_data,
-            expected_foodics=_dec(request.POST.get('expected_foodics')),
+            delivery_cancel_source=request.POST.get('delivery_cancel_source', '').strip(),
+            delivery_cancel_amount=_dec(request.POST.get('delivery_cancel_amount')),
             notes=request.POST.get('notes', ''),
+            # expected_foodics is set later by Audit, not by the waiter.
         )
+        if request.FILES.get('discount_attachment'):
+            entry.staff_discount_attachment = request.FILES['discount_attachment']
+        if request.FILES.get('notes_attachment'):
+            entry.notes_attachment = request.FILES['notes_attachment']
+        if request.FILES.get('cash_cancel_attachment'):
+            entry.cash_cancel_attachment = request.FILES['cash_cancel_attachment']
+        if request.FILES.get('visa_cancel_attachment'):
+            entry.visa_cancel_attachment = request.FILES['visa_cancel_attachment']
+        if request.FILES.get('delivery_cancel_attachment'):
+            entry.delivery_cancel_attachment = request.FILES['delivery_cancel_attachment']
         for key, _label in DELIVERY_SOURCES:
             uploaded = request.FILES.get(f'delivery_attachment_{key}')
             if uploaded:
@@ -288,6 +324,7 @@ def collector_view(request):
 
     entry_denoms = None
     entry_aed_denoms = None
+    entry_visa_rows = None
     if selected_entry:
         entry_denoms = [
             {'denom': d, 'count': selected_entry.cash_counts.get(d, 0), 'amount': float(d) * int(selected_entry.cash_counts.get(d, 0) or 0)}
@@ -303,6 +340,7 @@ def collector_view(request):
             }
             for d in AED_DENOMS if selected_entry.cash_counts_aed.get(d, 0)
         ]
+        entry_visa_rows = _build_visa_rows(selected_entry)
 
     shift_filter = request.GET.getlist('shift_filter')
     branch_filter = request.GET.get('branch_filter', '').strip()
@@ -384,6 +422,7 @@ def collector_view(request):
         'selected_handover': selected_handover,
         'entry_denoms': entry_denoms,
         'entry_aed_denoms': entry_aed_denoms,
+        'entry_visa_rows': entry_visa_rows,
         'delivery_sources': DELIVERY_SOURCES,
         'search_ref': search_ref,
         'active_tab': 'collector',
@@ -399,8 +438,10 @@ def dashboard_view(request):
         entry_id = request.POST.get('entry_id')
         entry = get_object_or_404(ShiftEntry, id=entry_id)
         entry.audit_notes = request.POST.get('audit_notes', '').strip()
+        if 'expected_foodics' in request.POST:
+            entry.expected_foodics = _dec(request.POST.get('expected_foodics'))
         entry.is_audited = True
-        entry.save(update_fields=['audit_notes', 'is_audited'])
+        entry.save()  # full save so recalculate() persists the updated variance too
         log_activity(request, 'entry_audited', description=entry.reference_id)
         messages.success(request, f'{entry.reference_id} marked as audited.')
         return redirect(f"/dashboard/?entry_id={entry_id}")
@@ -414,6 +455,7 @@ def dashboard_view(request):
 
     entry_denoms = None
     entry_aed_denoms = None
+    entry_visa_rows = None
     if selected_entry:
         entry_denoms = [
             {'denom': d, 'count': selected_entry.cash_counts.get(d, 0), 'amount': float(d) * int(selected_entry.cash_counts.get(d, 0) or 0)}
@@ -429,6 +471,7 @@ def dashboard_view(request):
             }
             for d in AED_DENOMS if selected_entry.cash_counts_aed.get(d, 0)
         ]
+        entry_visa_rows = _build_visa_rows(selected_entry)
 
     qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=False)
 
@@ -475,12 +518,14 @@ def dashboard_view(request):
             'branch': e.branch,
             'rows': [],
             'total_variance': Decimal('0'),
+            'total_actual': Decimal('0'),
         })
         group['rows'].append({
             'entry': e, 'collector': handover, 'status': status,
             'simple_status': simple_status, 'has_issue': has_issue,
         })
         group['total_variance'] += e.variance
+        group['total_actual'] += e.actual_total
 
     branch_groups = sorted(branch_groups_map.values(), key=lambda g: g['branch'].name)
 
@@ -512,6 +557,7 @@ def dashboard_view(request):
         'selected_handover': selected_handover,
         'entry_denoms': entry_denoms,
         'entry_aed_denoms': entry_aed_denoms,
+        'entry_visa_rows': entry_visa_rows,
         'active_tab': 'dashboard',
     }
     return render(request, 'salesapp/dashboard.html', context)
@@ -531,6 +577,12 @@ def create_user_view(request):
 
             if not head_cashier_name or not branch:
                 messages.error(request, 'Please fill in the head cashier name and select a branch.')
+                return redirect('create_user')
+            if not punch_id:
+                messages.error(request, 'Please set a Punch ID — it identifies this waiter when several share the same branch.')
+                return redirect('create_user')
+            if UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=punch_id).exists():
+                messages.error(request, f'{branch.name} already has a waiter with Punch ID "{punch_id}". Use a different one.')
                 return redirect('create_user')
             if len(password) < 8:
                 messages.error(request, 'Please set a password of at least 8 characters for this waiter account.')
@@ -764,8 +816,22 @@ def edit_entry_view(request, entry_id):
                 'cancel_amount': float(_dec(request.POST.get(f'cancel_amount_{key}', 0))),
             }
         entry.delivery_data = delivery_data
+        entry.cash_cancel_amount = _dec(request.POST.get('cash_cancel_amount'))
+        entry.visa_cancel_amount = _dec(request.POST.get('visa_cancel_amount'))
+        entry.delivery_cancel_source = request.POST.get('delivery_cancel_source', '').strip()
+        entry.delivery_cancel_amount = _dec(request.POST.get('delivery_cancel_amount'))
         entry.expected_foodics = _dec(request.POST.get('expected_foodics'))
         entry.notes = request.POST.get('notes', '')
+        if request.FILES.get('discount_attachment'):
+            entry.staff_discount_attachment = request.FILES['discount_attachment']
+        if request.FILES.get('notes_attachment'):
+            entry.notes_attachment = request.FILES['notes_attachment']
+        if request.FILES.get('cash_cancel_attachment'):
+            entry.cash_cancel_attachment = request.FILES['cash_cancel_attachment']
+        if request.FILES.get('visa_cancel_attachment'):
+            entry.visa_cancel_attachment = request.FILES['visa_cancel_attachment']
+        if request.FILES.get('delivery_cancel_attachment'):
+            entry.delivery_cancel_attachment = request.FILES['delivery_cancel_attachment']
         for key, _label in DELIVERY_SOURCES:
             uploaded = request.FILES.get(f'delivery_attachment_{key}')
             if uploaded:
@@ -899,6 +965,12 @@ def edit_user_view(request, user_id):
             if not head_cashier_name or not branch:
                 messages.error(request, 'Please fill in the head cashier name and select a branch.')
                 return redirect('edit_user', user_id=target.id)
+            if not punch_id:
+                messages.error(request, 'Please set a Punch ID — it identifies this waiter when several share the same branch.')
+                return redirect('edit_user', user_id=target.id)
+            if UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=punch_id).exclude(id=profile.id).exists():
+                messages.error(request, f'{branch.name} already has a different waiter with Punch ID "{punch_id}".')
+                return redirect('edit_user', user_id=target.id)
             if new_password and len(new_password) < 8:
                 messages.error(request, 'Password must be at least 8 characters.')
                 return redirect('edit_user', user_id=target.id)
@@ -1020,15 +1092,22 @@ def waiter_history_view(request):
     rows = []
     previous_date = None
     date_group = -1
+    tracked_actions = ['handover_saved', 'entry_audited', 'entry_edited']
     for e in qs:
         show_date_divider = (e.date != previous_date)
         if show_date_divider:
             date_group += 1
+        history = list(
+            ActivityLog.objects
+            .filter(description=e.reference_id, action__in=tracked_actions)
+            .order_by('created_at')
+        )
         rows.append({
             'entry': e,
             'show_date_divider': show_date_divider,
             'date_group': date_group,
             'simple_status': 'audited' if e.is_audited else ('collected' if getattr(e, 'collector', None) else 'not_collected'),
+            'history': history,
         })
         previous_date = e.date
 
