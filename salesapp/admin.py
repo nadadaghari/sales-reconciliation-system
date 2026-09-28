@@ -28,4 +28,4 @@ class VisaMachineFileAdmin(admin.ModelAdmin):
 
 @admin.register(CollectorHandover)
 class CollectorHandoverAdmin(admin.ModelAdmin):
-    list_display = ['shift_entry', 'collector_name', 'actual_total', 'diff_from_waiter', 'diff_from_expected', 'recounted_at']
+    list_display = ['shift_entry', 'collector_name', 'cash_total', 'diff_from_waiter', 'reconciled', 'recounted_at']

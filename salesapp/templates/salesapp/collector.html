@@ -45,9 +45,6 @@
     </h3>
     <div class="grid grid-4">
       <div class="total-strip"><span>Total Cash</span><span>{{ group_summary.total_cash|floatformat:3 }} RO</span></div>
-      <div class="total-strip"><span>Total Visa</span><span>{{ group_summary.total_visa|floatformat:3 }} RO</span></div>
-      <div class="total-strip"><span>Total Delivery</span><span>{{ group_summary.total_delivery|floatformat:3 }} RO</span></div>
-      <div class="total-strip"><span>Total Actual</span><span>{{ group_summary.total_actual|floatformat:3 }} RO</span></div>
     </div>
   </div>
   {% endif %}
@@ -64,7 +61,7 @@
       <thead>
         <tr>
           <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Accountant</th>
-          <th>Cash</th><th>Visa</th><th>Delivery</th><th>Actual</th><th>Expected from Foodics</th><th>Variance</th>
+          <th>Cash</th>
           <th>Status</th><th>Note</th><th></th><th></th>
         </tr>
       </thead>
@@ -72,7 +69,7 @@
         {% for e in group.entries %}
         {% if e.show_date_divider %}
         <tr data-branch="{{ forloop.parentloop.counter0 }}" data-dategroup="{{ e.date_group }}">
-          <td colspan="14" style="padding:10px 8px 4px; border-bottom:none;">
+          <td colspan="9" style="padding:10px 8px 4px; border-bottom:none;">
             <div style="display:flex; align-items:center; gap:10px;">
               <div style="flex:1; border-top:3px solid #F0EEE7;"></div>
               <strong style="font-size:12px; color:#1F3B4D; white-space:nowrap;">{{ e.date }}</strong>
@@ -86,14 +83,9 @@
           <td>Shift {{ e.shift }}</td>
           <td>{{ e.accountant|default:"-" }}</td>
           <td>{{ e.cash_total|floatformat:3 }}</td>
-          <td>{{ e.visa_total|floatformat:3 }}</td>
-          <td>{{ e.delivery_total|floatformat:3 }}</td>
-          <td>{{ e.actual_total|floatformat:3 }}</td>
-          <td>{{ e.expected_foodics|floatformat:3 }}</td>
-          <td style="{% if e.variance != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{{ e.variance|floatformat:3 }}</td>
           <td>
-            {% if e.simple_status == 'audited' %}
-              <span class="badge ok">Audited</span>
+            {% if e.simple_status == 'reconciled' %}
+              <span class="badge ok">Reconciled</span>
             {% elif e.simple_status == 'collected' %}
               <span class="badge ok" style="background:#E6F1FB; color:#185FA5;">Collected</span>
             {% else %}
@@ -246,21 +238,6 @@ function toggleBranchGroup(id){
   </div>
 </div>
 
-{% if selected_entry.staff_discount %}
-<div class="card">
-  <h3>Discount</h3>
-  <div style="overflow-x:auto;">
-  <table class="table-2col">
-    <thead><tr><th>Amount</th><th>Receipt</th></tr></thead>
-    <tbody><tr>
-      <td>{{ selected_entry.staff_discount }} RO</td>
-      <td>{% if selected_entry.staff_discount_attachment %}<a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-    </tr></tbody>
-  </table>
-  </div>
-</div>
-{% endif %}
-
 <div class="card">
   <h3>Cash Report — OMR</h3>
   <div class="grid grid-2" style="margin-bottom:10px;">
@@ -285,10 +262,11 @@ function toggleBranchGroup(id){
   {% endfor %}
   {% endif %}
 
-  <div class="total-strip"><span>Combined Total Cash (OMR + AED) — net of cancellation</span><span>{{ selected_entry.cash_total }} RO</span></div>
+  <div class="total-strip"><span>Combined Total Cash (OMR + AED)</span><span>{{ selected_entry.cash_total|add:selected_entry.cash_cancel_amount|floatformat:3 }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
   {% if selected_entry.cash_cancel_amount %}
   <div style="overflow-x:auto; margin-top:10px;">
-  <table class="table-2col">
+  <table>
     <thead><tr><th>Cash Cancelled Order</th><th>Receipt</th></tr></thead>
     <tbody><tr>
       <td>{{ selected_entry.cash_cancel_amount }} RO</td>
@@ -297,82 +275,6 @@ function toggleBranchGroup(id){
   </table>
   </div>
   {% endif %}
-</div>
-
-<div class="card">
-  <h3>Visa Report</h3>
-  <div style="overflow-x:auto;">
-  <table>
-    <thead><tr><th>Serial</th><th>Amount</th><th>Receipt</th></tr></thead>
-    <tbody>
-      {% for row in entry_visa_rows %}
-      <tr>
-        <td>{{ row.serial|default:"-" }}</td>
-        <td>{{ row.amount|floatformat:3 }} RO</td>
-        <td>{% if row.file %}<a href="{{ row.file.file.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="3" style="color:#8A8578;">No visa machines recorded.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  <div class="total-strip" style="margin-top:10px;"><span>Total Visa — net of cancellation</span><span>{{ selected_entry.visa_total }} RO</span></div>
-  {% if selected_entry.visa_cancel_amount %}
-  <div style="overflow-x:auto; margin-top:10px;">
-  <table class="table-2col">
-    <thead><tr><th>Visa Cancelled Order</th><th>Receipt</th></tr></thead>
-    <tbody><tr>
-      <td>{{ selected_entry.visa_cancel_amount }} RO</td>
-      <td>{% if selected_entry.visa_cancel_attachment %}<a href="{{ selected_entry.visa_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-    </tr></tbody>
-  </table>
-  </div>
-  {% endif %}
-</div>
-
-<div class="card">
-  <h3>Delivery & Other Reports</h3>
-  <div style="overflow-x:auto;">
-  <table>
-    <thead><tr><th>Source</th><th>Orders</th><th>Amount</th><th>Cancelled (Orders)</th><th>Cancelled (Amount)</th><th>Attachment</th></tr></thead>
-    <tbody>
-      {% for key, label in delivery_sources %}
-      <tr>
-        <td>{{ label }}</td>
-        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"orders"|default:0 }}</td>
-        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"amount"|default:0 }}</td>
-        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"cancel_orders"|default:0 }}</td>
-        <td>{{ selected_entry.delivery_data|get_item:key|get_item:"cancel_amount"|default:0 }}</td>
-        <td>
-          {% with file=selected_entry|get_delivery_attachment:key %}
-            {% if file %}<a href="{{ file.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}
-          {% endwith %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  <div class="total-strip" style="margin-top:10px;"><span>Total Delivery — net of cancellation</span><span>{{ selected_entry.delivery_total }} RO</span></div>
-  {% if selected_entry.delivery_cancel_amount %}
-  <div style="overflow-x:auto; margin-top:10px;">
-  <table>
-    <thead><tr><th>Delivery Cancelled Order</th><th>Company</th><th>Receipt</th></tr></thead>
-    <tbody><tr>
-      <td>{{ selected_entry.delivery_cancel_amount }} RO</td>
-      <td>{{ selected_entry.get_delivery_cancel_source_display|default:selected_entry.delivery_cancel_source }}</td>
-      <td>{% if selected_entry.delivery_cancel_attachment %}<a href="{{ selected_entry.delivery_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-    </tr></tbody>
-  </table>
-  </div>
-  {% endif %}
-</div>
-
-<div class="card">
-  <h3>Summary</h3>
-  <div class="total-strip"><span>Actual (before discount)</span><span>{{ selected_entry.actual_total|add:selected_entry.staff_discount }} RO</span></div>
-  <div class="total-strip" style="margin-top:6px;"><span>Actual with Discount</span><span>{{ selected_entry.actual_total }} RO</span></div>
 </div>
 
 <form method="post">
@@ -395,22 +297,32 @@ function toggleBranchGroup(id){
       <div class="denom-amount" id="cDenomAmt_{{ d }}" style="width:90px; color:#8A8578; font-size:13px;">0.000</div>
     </div>
     {% endfor %}
-    <div class="total-strip"><span>Collector Cash Total</span><span id="cCashTotalDisplay">0.000</span></div>
-    <div class="grid grid-2" style="margin-top:14px;">
-      <div><label>Total Visa (from machine receipts)</label>
-        <input type="number" step="0.001" name="visa_total" id="cVisa" class="ccalc-input"
-               value="{{ selected_handover.visa_total|default:'0' }}"></div>
-      <div><label>Total Delivery (matched against app reports)</label>
-        <input type="number" step="0.001" name="delivery_total" id="cDelivery" class="ccalc-input"
-               value="{{ selected_handover.delivery_total|default:'0' }}"></div>
+    <div class="total-strip"><span>Collector OMR Total</span><span id="cCashTotalDisplay">0.000</span></div>
+    <div style="margin:14px 0;">
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:0;">
+        <input type="checkbox" id="cHasAed" style="width:auto;" onchange="toggleCollectorAed()">
+        This shift includes AED cash
+      </label>
+    </div>
+    <div id="cAedBlock" style="display:none;">
+      <h3 style="font-size:14px;">AED (rate: {{ selected_entry.aed_exchange_rate }})</h3>
+      {% for d in aed_denoms %}
+      <div class="denom-row">
+        <div class="denom-label">{{ d }}</div>
+        <input type="number" min="0" style="width:90px;" name="cdenom_aed_{{ d }}" value="0"
+               data-cdenom-aed="{{ d }}" class="ccalc-input">
+        <div class="denom-amount" id="cDenomAedAmt_{{ d }}" style="width:220px; color:#8A8578; font-size:13px;">0.000</div>
+      </div>
+      {% endfor %}
+      <div class="total-strip"><span>Total AED → OMR</span><span id="cAedInOmrDisplay">0.000 RO</span></div>
     </div>
   </div>
 
   <div class="card">
     <h3>Comparison</h3>
-    <div class="total-strip"><span>Collector Total</span><span id="cActualDisplay">0.000</span></div>
-    <div class="total-strip" id="diffWaiterStrip"><span>Variance (Collector - Waiter)</span><span id="diffWaiterDisplay">0.000</span></div>
-    <div class="total-strip" id="diffExpectedStrip"><span>Variance (Collector - Foodics Expected)</span><span id="diffExpectedDisplay">0.000</span></div>
+    <div class="total-strip"><span>Waiter Cash (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Collector Cash Total (OMR + AED)</span><span id="cActualDisplay">0.000</span></div>
+    <div class="total-strip" id="diffWaiterStrip" style="margin-top:6px;"><span>Cash Difference (Collector − Waiter)</span><span id="diffWaiterDisplay">0.000</span></div>
     <div style="margin-top:12px;"><label>Collector Notes</label><input name="notes" style="max-width:100%;" value="{{ selected_handover.notes|default:'' }}"></div>
     <button type="submit" class="btn" style="margin-top:14px;">Save Collector Handover</button>
     <a href="{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="btn secondary" style="margin-top:14px; margin-left:8px; text-decoration:none; display:inline-block;">Back</a>
@@ -423,30 +335,48 @@ function toggleBranchGroup(id){
 </form>
 
 {{ selected_handover.cash_counts|default:"{}"|json_script:"existingCounts" }}
+{{ selected_handover.cash_counts_aed|default:"{}"|json_script:"existingCountsAed" }}
 {{ selected_entry.cash_counts|json_script:"waiterCashCounts" }}
+{{ selected_entry.cash_counts_aed|json_script:"waiterCashCountsAed" }}
 <script>
 const DENOMS = {{ denoms|safe }};
-const THRESHOLD = 5;
-const waiterActual = {{ selected_entry.actual_total }};
-const waiterVisaTotal = {{ selected_entry.visa_total }};
-const waiterDeliveryTotal = {{ selected_entry.delivery_total }};
+const AED_DENOMS = {{ aed_denoms|safe }};
+const THRESHOLD = {{ cash_tolerance }};
+const AED_RATE = {{ selected_entry.aed_exchange_rate }};
+const waiterCash = {{ selected_entry.cash_total }};
 const waiterCashCounts = JSON.parse(document.getElementById('waiterCashCounts').textContent);
+const waiterCashCountsAed = JSON.parse(document.getElementById('waiterCashCountsAed').textContent);
+const existingCounts = JSON.parse(document.getElementById('existingCounts').textContent);
+const existingCountsAed = JSON.parse(document.getElementById('existingCountsAed').textContent);
+const anyAed = counts => AED_DENOMS.some(d => (parseFloat(counts[d]) || 0) > 0);
+
+function showAedBlock(on){
+  document.getElementById('cHasAed').checked = on;
+  document.getElementById('cAedBlock').style.display = on ? 'block' : 'none';
+}
+function toggleCollectorAed(){
+  const on = document.getElementById('cHasAed').checked;
+  showAedBlock(on);
+  if(!on) document.querySelectorAll('[data-cdenom-aed]').forEach(inp => inp.value = 0);
+  calcCollector();
+}
 
 function confirmMatchesWaiter(){
   DENOMS.forEach(d => {
     const input = document.querySelector(`[data-cdenom="${d}"]`);
     if(input) input.value = waiterCashCounts[d] || 0;
   });
-  document.getElementById('cVisa').value = waiterVisaTotal;
-  document.getElementById('cDelivery').value = waiterDeliveryTotal;
+  AED_DENOMS.forEach(d => {
+    const input = document.querySelector(`[data-cdenom-aed="${d}"]`);
+    if(input) input.value = waiterCashCountsAed[d] || 0;
+  });
+  showAedBlock(anyAed(waiterCashCountsAed));
   calcCollector();
   const noteField = document.querySelector('[name="notes"]');
   if(noteField && !noteField.value){
-    noteField.value = 'Confirmed — matches waiter\'s reported count.';
+    noteField.value = 'Confirmed — matches waiter\'s reported cash.';
   }
 }
-const expectedFoodics = {{ selected_entry.expected_foodics }};
-const existingCounts = JSON.parse(document.getElementById('existingCounts').textContent);
 
 DENOMS.forEach(d => {
   if(existingCounts[d]){
@@ -454,28 +384,40 @@ DENOMS.forEach(d => {
     if(input) input.value = existingCounts[d];
   }
 });
+AED_DENOMS.forEach(d => {
+  if(existingCountsAed[d]){
+    const input = document.querySelector(`[data-cdenom-aed="${d}"]`);
+    if(input) input.value = existingCountsAed[d];
+  }
+});
+showAedBlock(anyAed(existingCountsAed) || anyAed(waiterCashCountsAed));
 
 function calcCollector(){
-  let cCash = 0;
+  let cOmr = 0;
   DENOMS.forEach(d => {
     const input = document.querySelector(`[data-cdenom="${d}"]`);
-    const count = parseFloat(input.value) || 0;
-    const amt = count * parseFloat(d);
+    const amt = (parseFloat(input.value) || 0) * parseFloat(d);
     document.getElementById('cDenomAmt_' + d).textContent = amt.toFixed(3) + ' RO';
-    cCash += amt;
+    cOmr += amt;
   });
-  document.getElementById('cCashTotalDisplay').textContent = cCash.toFixed(3) + ' RO';
-  const cVisa = parseFloat(document.getElementById('cVisa').value) || 0;
-  const cDelivery = parseFloat(document.getElementById('cDelivery').value) || 0;
-  const cActual = cCash + cVisa + cDelivery;
-  document.getElementById('cActualDisplay').textContent = cActual.toFixed(3) + ' RO';
+  document.getElementById('cCashTotalDisplay').textContent = cOmr.toFixed(3) + ' RO';
 
-  const diffWaiter = cActual - waiterActual;
-  const diffExpected = cActual - expectedFoodics;
-  document.getElementById('diffWaiterDisplay').textContent = diffWaiter.toFixed(3) + ' RO';
-  document.getElementById('diffExpectedDisplay').textContent = diffExpected.toFixed(3) + ' RO';
-  document.getElementById('diffWaiterStrip').classList.toggle('flag', Math.abs(diffWaiter) > THRESHOLD);
-  document.getElementById('diffExpectedStrip').classList.toggle('flag', Math.abs(diffExpected) > THRESHOLD);
+  let cAed = 0;
+  AED_DENOMS.forEach(d => {
+    const input = document.querySelector(`[data-cdenom-aed="${d}"]`);
+    const amt = (parseFloat(input.value) || 0) * parseFloat(d);
+    document.getElementById('cDenomAedAmt_' + d).textContent = amt.toFixed(3) + ' AED = ' + (amt * AED_RATE).toFixed(3) + ' RO';
+    cAed += amt;
+  });
+  const cAedInOmr = cAed * AED_RATE;
+  document.getElementById('cAedInOmrDisplay').textContent = cAedInOmr.toFixed(3) + ' RO';
+
+  const cTotal = cOmr + cAedInOmr;
+  document.getElementById('cActualDisplay').textContent = cTotal.toFixed(3) + ' RO';
+
+  const diff = cTotal - waiterCash;
+  document.getElementById('diffWaiterDisplay').textContent = diff.toFixed(3) + ' RO';
+  document.getElementById('diffWaiterStrip').classList.toggle('flag', Math.abs(diff) > THRESHOLD);
 }
 
 document.querySelectorAll('.ccalc-input').forEach(inp => inp.addEventListener('input', calcCollector));

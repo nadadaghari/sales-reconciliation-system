@@ -1,0 +1,162 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+
+<div class="card">
+  <h3>Cash Reconciliation</h3>
+  <p style="color:#8A8578; font-size:13px; margin-top:0;">
+    The collector's cash count against the cash the waiter reported (after cash cancellations).
+    Any difference is flagged and needs a note; shifts that match exactly can be approved together.
+  </p>
+  <form method="get">
+    <div class="grid grid-5" style="margin-bottom:14px;">
+      <div>
+        <label>Show</label>
+        <select name="status">
+          <option value="pending" {% if status == 'pending' %}selected{% endif %}>Awaiting reconciliation</option>
+          <option value="reconciled" {% if status == 'reconciled' %}selected{% endif %}>Already reconciled</option>
+        </select>
+      </div>
+      <div><label>Filter by Branch</label><input name="branch_filter" value="{{ branch_filter }}" placeholder="e.g. Kucu Ibri"></div>
+      <div><label>Date From</label><input name="date_from" type="date" value="{{ date_from }}"></div>
+      <div><label>Date To</label><input name="date_to" type="date" value="{{ date_to }}"></div>
+      <div><label>Submit Request No.</label><input name="search_ref" value="{{ search_ref }}" placeholder="e.g. K-DH001-0002"></div>
+    </div>
+    <button type="submit" class="btn small">Apply</button>
+  </form>
+</div>
+
+{% if status == 'pending' %}
+
+<div class="card">
+  <div class="grid grid-3">
+    <div class="total-strip {% if with_diff %}flag{% endif %}"><span>With a cash difference</span><span>{{ with_diff|length }}</span></div>
+    <div class="total-strip"><span>Matched — ready to approve</span><span>{{ matched|length }}</span></div>
+    <div class="total-strip {% if overdue_count %}flag{% endif %}">
+      <span>Waiting for the collector</span>
+      <span>{{ waiting_count }}{% if overdue_count %} ({{ overdue_count }} older than {{ overdue_days }} days){% endif %}</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Needs attention — cash difference</h3>
+  {% if with_diff %}
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Branch</th><th>Submit Request No.</th><th>Date</th><th>Shift</th>
+        <th>Waiter Cash</th><th>Collector Cash</th><th>Difference</th><th>Collector Note</th><th>Reconcile</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in with_diff %}
+      <tr>
+        <td>{{ h.shift_entry.branch.name }}</td>
+        <td><strong>{{ h.shift_entry.reference_id }}</strong></td>
+        <td>{{ h.shift_entry.date }}</td>
+        <td>Shift {{ h.shift_entry.shift }}</td>
+        <td>{{ h.shift_entry.cash_total|floatformat:3 }}</td>
+        <td>{{ h.cash_total|floatformat:3 }}</td>
+        <td style="color:#B94A3F; font-weight:700;">{{ h.diff_from_waiter|floatformat:3 }}</td>
+        <td>{{ h.notes|default:"-" }}</td>
+        <td>
+          <form method="post" action="{% url 'cash_reconcile_action' %}" style="display:flex; gap:6px; align-items:center;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="approve_one">
+            <input type="hidden" name="handover_id" value="{{ h.id }}">
+            <input name="note" required placeholder="Why is this accepted?" style="min-width:170px;">
+            <button type="submit" class="btn small">Approve</button>
+            <a href="{% url 'collector' %}?entry_id={{ h.shift_entry.id }}" class="btn secondary small" style="text-decoration:none;">Edit count</a>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div style="color:#8A8578; font-size:13px;">No cash differences waiting for a decision.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Matched — ready to approve</h3>
+  {% if matched %}
+  <form method="post" action="{% url 'cash_reconcile_action' %}" onsubmit="return confirm('Approve the selected matched shifts?');">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="approve_matched">
+    <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th><input type="checkbox" checked style="width:auto;" onclick="toggleAllMatched(this)" title="Select all"></th>
+          <th>Branch</th><th>Submit Request No.</th><th>Date</th><th>Shift</th>
+          <th>Waiter Cash</th><th>Collector Cash</th><th>Collector Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in matched %}
+        <tr>
+          <td><input type="checkbox" name="handover_id" value="{{ h.id }}" checked style="width:auto;" class="matched-box"></td>
+          <td>{{ h.shift_entry.branch.name }}</td>
+          <td><strong>{{ h.shift_entry.reference_id }}</strong></td>
+          <td>{{ h.shift_entry.date }}</td>
+          <td>Shift {{ h.shift_entry.shift }}</td>
+          <td>{{ h.shift_entry.cash_total|floatformat:3 }}</td>
+          <td>{{ h.cash_total|floatformat:3 }}</td>
+          <td>{{ h.notes|default:"-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <button type="submit" class="btn" style="margin-top:14px;">Approve Selected</button>
+  </form>
+  {% else %}
+  <div style="color:#8A8578; font-size:13px;">Nothing matched and waiting for approval.</div>
+  {% endif %}
+</div>
+
+{% else %}
+
+<div class="card">
+  <h3>Already reconciled</h3>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Branch</th><th>Submit Request No.</th><th>Date</th><th>Shift</th>
+        <th>Waiter Cash</th><th>Collector Cash</th><th>Difference</th><th>Note</th><th>Approved by</th><th>When</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in reconciled_rows %}
+      <tr>
+        <td>{{ h.shift_entry.branch.name }}</td>
+        <td><strong>{{ h.shift_entry.reference_id }}</strong></td>
+        <td>{{ h.shift_entry.date }}</td>
+        <td>Shift {{ h.shift_entry.shift }}</td>
+        <td>{{ h.shift_entry.cash_total|floatformat:3 }}</td>
+        <td>{{ h.cash_total|floatformat:3 }}</td>
+        <td style="{% if h.diff_from_waiter != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{{ h.diff_from_waiter|floatformat:3 }}</td>
+        <td>{{ h.reconcile_note|default:"-" }}</td>
+        <td>{{ h.reconciled_by.username|default:"-" }}</td>
+        <td>{{ h.reconciled_at|date:"Y-m-d H:i" }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="10" style="color:#8A8578;">Nothing reconciled yet for these filters.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% endif %}
+
+<script>
+function toggleAllMatched(source){
+  document.querySelectorAll('.matched-box').forEach(box => box.checked = source.checked);
+}
+</script>
+{% endblock %}

@@ -3,6 +3,7 @@
 
 {% if submitted_ref %}
 <div style="min-height:75vh; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; text-align:center;">
+  {% if submitted_branch %}<div style="font-size:28px; font-weight:700; color:#1F3B4D; margin-bottom:18px;">{{ submitted_branch }}</div>{% endif %}
   <div style="font-size:20px; color:#8A8578; margin-bottom:14px; letter-spacing:0.5px;">SUBMIT REQUEST NO.</div>
   <div style="font-size:72px; font-weight:800; color:#1F3B4D; letter-spacing:1px; line-height:1.1;">{{ submitted_ref }}</div>
   <div style="margin-top:22px; font-size:16px; color:#2E7D5B; font-weight:600;">Submitted Successfully — write this number on the cash envelope</div>
@@ -115,13 +116,7 @@
     <div id="visaRows"></div>
     <button type="button" class="btn secondary small" onclick="addVisaRow()">+ Add Machine</button>
     <div class="total-strip"><span>Total Visa</span><span id="visaTotalDisplay">0.000</span></div>
-    <div class="total-strip" style="margin-top:6px;"><span>Visa Actual Amount (after cancellation)</span><span id="visaActualDisplay">0.000 RO</span></div>
 
-    <h3 style="margin-top:20px; font-size:14px;">Visa Cancelled Order (if any) — auto-deducted</h3>
-    <div class="grid grid-2">
-      <div><label>Cancelled Amount</label><input name="visa_cancel_amount" type="number" step="0.001" value="0" class="calc-input" id="visaCancelAmount"></div>
-      <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_cancel_attachment" accept="image/*,.pdf"></div>
-    </div>
   </div>
 
   <div class="card">
@@ -147,19 +142,9 @@
     <div class="total-strip" style="margin-top:6px;"><span>Delivery Actual Amount (after cancellation)</span><span id="deliveryActualDisplay">0.000 RO</span></div>
 
     <h3 style="margin-top:20px; font-size:14px;">Delivery Cancelled Order (if any) — auto-deducted</h3>
-    <div class="grid grid-3">
-      <div>
-        <label>Delivery Company</label>
-        <select name="delivery_cancel_source">
-          <option value="">— Select —</option>
-          {% for key, label in delivery_sources %}
-            <option value="{{ key }}">{{ label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div><label>Cancelled Amount</label><input name="delivery_cancel_amount" type="number" step="0.001" value="0" class="calc-input" id="deliveryCancelAmount"></div>
-      <div><label>Receipt (photo/PDF)</label><input type="file" name="delivery_cancel_attachment" accept="image/*,.pdf"></div>
-    </div>
+    <div id="deliveryCancelRows"></div>
+    <button type="button" class="btn secondary small" onclick="addDeliveryCancelRow()">+ Add Cancelled Order</button>
+    <div class="total-strip" style="margin-top:10px;"><span>Total Delivery Cancelled</span><span id="deliveryCancelTotalDisplay">0.000 RO</span></div>
   </div>
 
   <div class="card">
@@ -176,6 +161,7 @@
   <button type="submit" class="btn">Submit</button>
 </form>
 
+{{ delivery_sources|json_script:"deliverySourcesData" }}
 <script>
 const DENOMS = {{ denoms|safe }};
 const AED_DENOMS = {{ aed_denoms|safe }};
@@ -199,11 +185,36 @@ function addVisaRow(){
   row.id = id;
   row.style.gridTemplateColumns = '2fr 1fr 2fr auto';
   row.innerHTML = `
+    <input type="hidden" name="visa_row[]" value="${visaCount}">
     <div><label>Machine Serial</label><input name="visa_serial[]" placeholder="Serial"></div>
     <div><label>Amount</label><input type="number" step="0.001" value="0" name="visa_amount[]" class="calc-input"></div>
-    <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_attachment[]" accept="image/*,.pdf"></div>
+    <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_attachment_${visaCount}" accept="image/*,.pdf"></div>
     <button type="button" class="btn secondary small" onclick="document.getElementById('${id}').remove(); calcAll();">Remove</button>`;
   c.appendChild(row);
+  row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
+  if(window.enhanceFileInputs) window.enhanceFileInputs();
+}
+
+let deliveryCancelCount = 0;
+const DELIVERY_SOURCES = JSON.parse(document.getElementById('deliverySourcesData').textContent);
+
+// Cancelled delivery orders: as many rows as needed — different companies, or
+// the same company more than once. Each row keeps its own receipt.
+function addDeliveryCancelRow(){
+  deliveryCancelCount++;
+  const n = deliveryCancelCount;
+  const options = DELIVERY_SOURCES.map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
+  const row = document.createElement('div');
+  row.className = 'visa-row';
+  row.id = 'dcancel_' + n;
+  row.style.gridTemplateColumns = '2fr 1fr 2fr auto';
+  row.innerHTML = `
+    <input type="hidden" name="delivery_cancel_row[]" value="${n}">
+    <div><label>Delivery Company</label><select name="delivery_cancel_source[]" required><option value="">— Select —</option>${options}</select></div>
+    <div><label>Cancelled Amount</label><input type="number" step="0.001" min="0.001" name="delivery_cancel_amount[]" class="calc-input" required></div>
+    <div><label>Receipt (photo/PDF)</label><input type="file" name="delivery_cancel_attachment_${n}" accept="image/*,.pdf"></div>
+    <button type="button" class="btn secondary small" onclick="document.getElementById('dcancel_${n}').remove(); calcAll();">Remove</button>`;
+  document.getElementById('deliveryCancelRows').appendChild(row);
   row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
   if(window.enhanceFileInputs) window.enhanceFileInputs();
 }
@@ -239,21 +250,20 @@ function calcAll(){
 
   let visaTotal = 0;
   document.querySelectorAll('[name="visa_amount[]"]').forEach(inp => visaTotal += (parseFloat(inp.value)||0));
-  const visaCancel = parseFloat(document.getElementById('visaCancelAmount').value) || 0;
-  const netVisa = visaTotal - visaCancel;
   document.getElementById('visaTotalDisplay').textContent = visaTotal.toFixed(3) + ' RO';
-  document.getElementById('visaActualDisplay').textContent = netVisa.toFixed(3) + ' RO';
 
   let deliveryTotal = 0;
   document.querySelectorAll('[data-del]').forEach(inp => deliveryTotal += (parseFloat(inp.value)||0));
-  const deliveryCancel = parseFloat(document.getElementById('deliveryCancelAmount').value) || 0;
+  let deliveryCancel = 0;
+  document.querySelectorAll('[name="delivery_cancel_amount[]"]').forEach(inp => deliveryCancel += (parseFloat(inp.value)||0));
+  document.getElementById('deliveryCancelTotalDisplay').textContent = deliveryCancel.toFixed(3) + ' RO';
   const netDelivery = deliveryTotal - deliveryCancel;
   document.getElementById('deliveryTotalDisplay').textContent = deliveryTotal.toFixed(3) + ' RO';
   document.getElementById('deliveryActualDisplay').textContent = netDelivery.toFixed(3) + ' RO';
 
   const discount = parseFloat(document.getElementById('discountAmount').value) || 0;
 
-  const actual = netCash + netVisa + netDelivery;
+  const actual = netCash + visaTotal + netDelivery;
   const actualWithDiscount = actual - discount;
   document.getElementById('actualDisplay').textContent = actual.toFixed(3) + ' RO';
   document.getElementById('actualWithDiscountDisplay').textContent = actualWithDiscount.toFixed(3) + ' RO';

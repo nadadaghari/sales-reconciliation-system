@@ -42,14 +42,14 @@
     <div onclick="toggleAuditGroup('audit-group-{{ forloop.counter }}')" style="display:flex; align-items:center; gap:16px; padding:12px 16px; background:#F0EEE7; cursor:pointer; flex-wrap:wrap;">
       <span id="arrow-audit-group-{{ forloop.counter }}" style="font-size:11px; color:#1F3B4D; display:inline-block; transition:transform 0.15s;">&#9654;</span>
       <strong style="flex:0 0 160px; font-size:14px; color:#1F3B4D;">{{ group.branch.name }}</strong>
-      <span style="font-size:12px; margin-left:auto; color:#1F3B4D;">Actual Amount <strong>{{ group.total_actual|floatformat:3 }}</strong></span>
+      <span style="font-size:12px; margin-left:auto; color:#1F3B4D;">Sales Actual <strong>{{ group.total_actual|floatformat:3 }}</strong></span>
     </div>
     <div id="audit-group-{{ forloop.counter }}" style="display:none; overflow-x:auto;">
     <table style="margin:0;">
       <thead>
         <tr>
           <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Accountant</th>
-          <th>Waiter Actual</th><th>Expected</th><th>Collector Actual</th><th>Final Variance</th>
+          <th>Sales Actual</th><th>Foodics</th><th>Variance</th>
           <th>Status</th><th>Note</th><th></th><th></th>
         </tr>
       </thead>
@@ -57,7 +57,7 @@
         {% for row in group.rows %}
         {% if row.show_date_divider %}
         <tr data-branch="{{ forloop.parentloop.counter0 }}" data-dategroup="{{ row.date_group }}">
-          <td colspan="12" style="padding:10px 8px 4px; border-bottom:none;">
+          <td colspan="11" style="padding:10px 8px 4px; border-bottom:none;">
             <div style="display:flex; align-items:center; gap:10px;">
               <div style="flex:1; border-top:3px solid #F0EEE7;"></div>
               <strong style="font-size:12px; color:#1F3B4D; white-space:nowrap;">{{ row.entry.date }}</strong>
@@ -70,17 +70,14 @@
           <td>{{ row.entry.date }}</td>
           <td>Shift {{ row.entry.shift }}</td>
           <td>{{ row.entry.accountant|default:"-" }}</td>
-          <td><span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.actual_total }} RO</span></td>
-          <td><span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.expected_foodics }} RO</span></td>
-          <td>{% if row.collector %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.collector.actual_total }} RO</span>{% else %}-{% endif %}</td>
-          <td>{% if row.collector %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.collector.diff_from_expected }} RO</span>{% else %}-{% endif %}</td>
+          <td>{{ row.entry.sales_actual }} RO</td>
+          <td>{% if row.entry.expected_foodics %}{{ row.entry.expected_foodics }} RO{% else %}-{% endif %}</td>
+          <td>{% if row.entry.expected_foodics %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.variance }} RO</span>{% else %}-{% endif %}</td>
           <td>
-            {% if row.simple_status == 'audited' %}
-              <span class="badge ok">Audited</span>
-            {% elif row.simple_status == 'collected' %}
-              <span class="badge ok" style="background:#E6F1FB; color:#185FA5;">Collected</span>
+            {% if row.simple_status == 'reviewed' %}
+              <span class="badge ok">Reviewed</span>
             {% else %}
-              <span class="badge flag">Not Collected</span>
+              <span class="badge flag">Pending</span>
             {% endif %}
           </td>
           <td>
@@ -233,7 +230,7 @@ function toggleAuditGroup(id){
 <div class="card">
   <h3>Discount</h3>
   <div style="overflow-x:auto;">
-  <table class="table-2col">
+  <table>
     <thead><tr><th>Amount</th><th>Receipt</th></tr></thead>
     <tbody><tr>
       <td>{{ selected_entry.staff_discount }} RO</td>
@@ -265,10 +262,11 @@ function toggleAuditGroup(id){
   {% endfor %}
   {% endif %}
 
-  <div class="total-strip"><span>Combined Total Cash (OMR + AED) — net of cancellation</span><span>{{ selected_entry.cash_total }} RO</span></div>
+  <div class="total-strip"><span>Combined Total Cash (OMR + AED)</span><span>{{ selected_entry.cash_total|add:selected_entry.cash_cancel_amount|floatformat:3 }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
   {% if selected_entry.cash_cancel_amount %}
   <div style="overflow-x:auto; margin-top:10px;">
-  <table class="table-2col">
+  <table>
     <thead><tr><th>Cash Cancelled Order</th><th>Receipt</th></tr></thead>
     <tbody><tr>
       <td>{{ selected_entry.cash_cancel_amount }} RO</td>
@@ -297,18 +295,7 @@ function toggleAuditGroup(id){
     </tbody>
   </table>
   </div>
-  <div class="total-strip" style="margin-top:10px;"><span>Total Visa — net of cancellation</span><span>{{ selected_entry.visa_total }} RO</span></div>
-  {% if selected_entry.visa_cancel_amount %}
-  <div style="overflow-x:auto; margin-top:10px;">
-  <table class="table-2col">
-    <thead><tr><th>Visa Cancelled Order</th><th>Receipt</th></tr></thead>
-    <tbody><tr>
-      <td>{{ selected_entry.visa_cancel_amount }} RO</td>
-      <td>{% if selected_entry.visa_cancel_attachment %}<a href="{{ selected_entry.visa_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-    </tr></tbody>
-  </table>
-  </div>
-  {% endif %}
+  <div class="total-strip" style="margin-top:10px;"><span>Total Visa</span><span>{{ selected_entry.visa_total }} RO</span></div>
 </div>
 
 <div class="card">
@@ -334,16 +321,21 @@ function toggleAuditGroup(id){
     </tbody>
   </table>
   </div>
-  <div class="total-strip" style="margin-top:10px;"><span>Total Delivery — net of cancellation</span><span>{{ selected_entry.delivery_total }} RO</span></div>
-  {% if selected_entry.delivery_cancel_amount %}
+  <div class="total-strip" style="margin-top:10px;"><span>Total Delivery</span><span>{{ selected_entry.delivery_total|add:selected_entry.delivery_cancel_amount|floatformat:3 }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px;"><span>Delivery Actual Amount (after cancellation)</span><span>{{ selected_entry.delivery_total }} RO</span></div>
+  {% if selected_entry.delivery_cancellations.all %}
   <div style="overflow-x:auto; margin-top:10px;">
   <table>
     <thead><tr><th>Delivery Cancelled Order</th><th>Company</th><th>Receipt</th></tr></thead>
-    <tbody><tr>
-      <td>{{ selected_entry.delivery_cancel_amount }} RO</td>
-      <td>{{ selected_entry.get_delivery_cancel_source_display|default:selected_entry.delivery_cancel_source }}</td>
-      <td>{% if selected_entry.delivery_cancel_attachment %}<a href="{{ selected_entry.delivery_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-    </tr></tbody>
+    <tbody>
+      {% for c in selected_entry.delivery_cancellations.all %}
+      <tr>
+        <td>{{ c.amount }} RO</td>
+        <td>{{ c.get_source_display }}</td>
+        <td>{% if c.attachment %}<a href="{{ c.attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
   </table>
   </div>
   {% endif %}
@@ -353,23 +345,7 @@ function toggleAuditGroup(id){
   <h3>Summary</h3>
   <div class="total-strip"><span>Actual (before discount)</span><span>{{ selected_entry.actual_total|add:selected_entry.staff_discount }} RO</span></div>
   <div class="total-strip" style="margin-top:6px;"><span>Actual with Discount</span><span>{{ selected_entry.actual_total }} RO</span></div>
-</div>
-
-<div class="card">
-  <h3>Collector Handover</h3>
-  {% if selected_handover %}
-  <div class="grid grid-2">
-    <div><label>Collector Name</label><input value="{{ selected_handover.collector_name|default:'-' }}" disabled></div>
-    <div><label>Collector Total</label><input value="{{ selected_handover.actual_total }} RO" disabled></div>
-  </div>
-  <div class="grid grid-2" style="margin-top:12px;">
-    <div><label>Variance (Collector - Waiter)</label><input value="{{ selected_handover.diff_from_waiter }} RO" disabled></div>
-    <div><label>Variance (Collector - Foodics Expected)</label><input value="{{ selected_handover.diff_from_expected }} RO" disabled></div>
-  </div>
-  <div style="margin-top:12px;"><label>Collector Notes</label><input value="{{ selected_handover.notes|default:'-' }}" disabled></div>
-  {% else %}
-  <div style="color:#8A8578; font-size:13px;">Not yet collected by a Collector.</div>
-  {% endif %}
+  <div class="total-strip" style="margin-top:6px;"><span>Sales Actual (cash + visa, excl. delivery)</span><span>{{ selected_entry.sales_actual }} RO</span></div>
 </div>
 
 <form method="post">
@@ -378,7 +354,7 @@ function toggleAuditGroup(id){
   <div class="card">
     <h3>Reconciliation with Foodics</h3>
     <div class="grid grid-2">
-      <div><label>Actual Total (from waiter)</label><input value="{{ selected_entry.actual_total }} RO" disabled></div>
+      <div><label>Sales Actual (cash + visa, excl. delivery)</label><input value="{{ selected_entry.sales_actual }} RO" disabled></div>
       <div><label>Expected from Foodics</label><input name="expected_foodics" type="number" step="0.001" value="{{ selected_entry.expected_foodics }}"></div>
     </div>
     <div class="total-strip" style="margin-top:12px; {% if selected_entry.variance != 0 %}background:#FBE9E6;{% endif %}"><span>Variance</span><span>{{ selected_entry.variance }} RO</span></div>
@@ -386,10 +362,10 @@ function toggleAuditGroup(id){
   <div class="card">
     <h3>Audit Note</h3>
     {% if selected_entry.is_audited %}
-      <div class="success-banner" style="margin-bottom:14px;">This entry has already been marked as audited.</div>
+      <div class="success-banner" style="margin-bottom:14px;">The daily sales review for this entry has already been saved.</div>
     {% endif %}
     <div><label>Note</label><textarea name="audit_notes" rows="3" placeholder="Write your review note...">{{ selected_entry.audit_notes }}</textarea></div>
-    <button type="submit" class="btn" style="margin-top:14px;">Audit</button>
+    <button type="submit" class="btn" style="margin-top:14px;">Save Review</button>
   </div>
 </form>
 

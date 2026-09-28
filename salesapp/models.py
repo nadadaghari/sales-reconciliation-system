@@ -104,9 +104,6 @@ class ShiftEntry(models.Model):
     # [{"serial": "10026512", "amount": 66.4}, ...] — per-machine receipt files live in VisaMachineFile.
     visa_entries = models.JSONField(default=list, blank=True)
     visa_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-    # A cancelled/refunded visa transaction — deducted directly from the final total.
-    visa_cancel_amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
-    visa_cancel_attachment = models.FileField(upload_to='cancel_attachments/%Y/%m/', blank=True, null=True)
 
     # {"talabat": {"orders": 60, "amount": 239.52, "cancel_orders": 0, "cancel_amount": 0}, ...}
     delivery_data = models.JSONField(default=dict, blank=True)
@@ -114,12 +111,10 @@ class ShiftEntry(models.Model):
     # One attachment per delivery source (fixed set, so plain fields rather than a related model).
     delivery_attachment_talabat = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
     delivery_attachment_tmdone = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
-    delivery_attachment_khedmah = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
     delivery_attachment_callcenter = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
-    # A cancelled delivery order from a specific company — deducted directly from the final total.
-    delivery_cancel_source = models.CharField(max_length=20, choices=DELIVERY_SOURCES, blank=True)
+    # Sum of this entry's DeliveryCancellation rows. Stored here because recalculate()
+    # runs on save, before a brand-new entry has any related rows to read.
     delivery_cancel_amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
-    delivery_cancel_attachment = models.FileField(upload_to='cancel_attachments/%Y/%m/', blank=True, null=True)
 
     actual_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     expected_foodics = models.DecimalField(max_digits=12, decimal_places=3, default=0)
@@ -140,26 +135,31 @@ class ShiftEntry(models.Model):
 
     def recalculate(self):
         """Server-side auto-calculation — never trust client-side totals.
-        Each section's own cancellation is deducted directly from that
-        section's total (cash_total, visa_total, delivery_total are all
-        stored net of their cancellation). The discount then comes off the
-        combined total last, giving actual_total — the one figure used
-        everywhere downstream (collector comparison, audit variance)."""
+        Cash and delivery totals are stored net of their own cancellations
+        (visa has none). actual_total is the full shift figure after the
+        discount; the audit's Daily Sales comparison uses sales_actual
+        (below), which leaves delivery out."""
         omr_cash = _cash_total_from_counts(self.cash_counts)
         aed_cash = _aed_cash_total_from_counts(self.cash_counts_aed)
         rate = Decimal(str(self.aed_exchange_rate or 0))
         gross_cash = omr_cash + (aed_cash * rate)
         self.cash_total = gross_cash - Decimal(str(self.cash_cancel_amount or 0))
 
-        gross_visa = _visa_total_from_entries(self.visa_entries)
-        self.visa_total = gross_visa - Decimal(str(self.visa_cancel_amount or 0))
+        self.visa_total = _visa_total_from_entries(self.visa_entries)
 
         gross_delivery = _delivery_total_from_data(self.delivery_data)
         self.delivery_total = gross_delivery - Decimal(str(self.delivery_cancel_amount or 0))
 
         actual_before_discount = self.cash_total + self.visa_total + self.delivery_total
         self.actual_total = actual_before_discount - Decimal(str(self.staff_discount or 0))
-        self.variance = self.actual_total - Decimal(str(self.expected_foodics or 0))
+        # Daily Sales variance: what the branch sold (cash + visa) vs Foodics.
+        self.variance = self.sales_actual - Decimal(str(self.expected_foodics or 0))
+
+    @property
+    def sales_actual(self):
+        """Cash + visa, after the discount, with delivery left out — the figure
+        Audit compares against Foodics in the Daily Sales review."""
+        return self.cash_total + self.visa_total - Decimal(str(self.staff_discount or 0))
 
     def save(self, *args, **kwargs):
         self.recalculate()
@@ -184,48 +184,59 @@ class VisaMachineFile(models.Model):
         return f'Visa file for {self.serial or "unknown machine"} ({self.entry})'
 
 
+class DeliveryCancellation(models.Model):
+    """One cancelled delivery order: which company, how much, and its receipt.
+    An entry can have several (different companies, or the same one repeated)."""
+    shift_entry = models.ForeignKey(ShiftEntry, on_delete=models.CASCADE, related_name='delivery_cancellations')
+    source = models.CharField(max_length=20, choices=DELIVERY_SOURCES)
+    amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+    attachment = models.FileField(upload_to='cancel_attachments/%Y/%m/', blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.get_source_display()} cancel {self.amount} ({self.shift_entry})'
+
+
 class CollectorHandover(models.Model):
-    """The collector's independent recount for a given shift entry."""
+    """The collector's independent CASH recount for a shift entry. Visa and
+    delivery money never passes through the collector, so only cash is
+    counted and compared (against the waiter's cash, net of cancellations)."""
 
     shift_entry = models.OneToOneField(ShiftEntry, on_delete=models.CASCADE, related_name='collector')
     collector_name = models.CharField(max_length=200, blank=True)
 
     cash_counts = models.JSONField(default=dict, blank=True)
+    cash_counts_aed = models.JSONField(default=dict, blank=True)
     cash_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
 
-    visa_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-    delivery_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-
-    actual_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-
-    # actual_total - shift_entry.actual_total  → flags a handover-stage problem
+    # cash_total - shift_entry.cash_total  → the Cash Reconciliation difference
     diff_from_waiter = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-    # actual_total - shift_entry.expected_foodics → the real final variance
-    diff_from_expected = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+
+    # Stage 2 of the audit: Audit confirms the cash matched (or explained the difference).
+    reconciled = models.BooleanField(default=False)
+    reconciled_at = models.DateTimeField(null=True, blank=True)
+    reconciled_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    reconcile_note = models.TextField(blank=True)  # required when the shift is approved with a difference
 
     notes = models.TextField(blank=True)
     recounted_at = models.DateTimeField(auto_now=True)
 
     def recalculate(self):
-        self.cash_total = _cash_total_from_counts(self.cash_counts)
-        self.actual_total = (
-            self.cash_total
-            + Decimal(str(self.visa_total or 0))
-            + Decimal(str(self.delivery_total or 0))
-        )
-        self.diff_from_waiter = self.actual_total - self.shift_entry.actual_total
-        self.diff_from_expected = self.actual_total - self.shift_entry.expected_foodics
+        omr = _cash_total_from_counts(self.cash_counts)
+        aed = _aed_cash_total_from_counts(self.cash_counts_aed)
+        rate = Decimal(str(self.shift_entry.aed_exchange_rate or 0))
+        self.cash_total = omr + (aed * rate)
+        self.diff_from_waiter = self.cash_total - self.shift_entry.cash_total
 
     def save(self, *args, **kwargs):
         self.recalculate()
         super().save(*args, **kwargs)
 
-    def status(self, threshold):
-        if abs(self.diff_from_waiter) > threshold:
-            return 'handover_discrepancy'
-        if abs(self.diff_from_expected) > threshold:
-            return 'final_variance'
-        return 'matched'
+    def has_difference(self, threshold):
+        return abs(self.diff_from_waiter) > threshold
 
     def __str__(self):
         return f'Handover for {self.shift_entry}'
@@ -254,8 +265,9 @@ class ActivityLog(models.Model):
         ('entry_edited', 'Shift Entry Edited'),
         ('entry_archived', 'Shift Entry Archived'),
         ('entry_unarchived', 'Shift Entry Unarchived'),
-        ('handover_saved', 'Collector Handover Saved'),
-        ('entry_audited', 'Shift Entry Audited'),
+        ('handover_saved', 'Cash Collected'),
+        ('entry_audited', 'Daily Sales Reviewed'),
+        ('cash_reconciled', 'Cash Reconciled'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='activity_logs')
