@@ -22,6 +22,7 @@ class UserProfile(models.Model):
         ('waiter', 'Waiter / Branch Accountant'),
         ('collector', 'Collector'),
         ('audit', 'Audit'),
+        ('manager', 'Manager (View Only)'),
         ('admin', 'Admin'),
         ('it', 'IT (Full Access)'),
     ]
@@ -34,6 +35,9 @@ class UserProfile(models.Model):
     head_cashier_name = models.CharField(max_length=200, blank=True)
     # Only meaningful for the 'waiter' role — their fingerprint/attendance (punch) ID.
     punch_id = models.CharField(max_length=50, blank=True)
+    # Set when a waiter registered themselves through the public link and is
+    # still waiting for an admin to approve (activate) the account.
+    pending_approval = models.BooleanField(default=False)
 
     @property
     def is_full_access(self):
@@ -65,6 +69,14 @@ def _delivery_total_from_data(delivery_data: dict) -> Decimal:
     for key, _label in DELIVERY_SOURCES:
         source = delivery_data.get(key, {}) or {}
         total += Decimal(str(source.get('amount', 0) or 0))
+    return total
+
+
+def _delivery_cancel_total_from_data(delivery_data: dict) -> Decimal:
+    total = Decimal('0')
+    for key, _label in DELIVERY_SOURCES:
+        source = delivery_data.get(key, {}) or {}
+        total += Decimal(str(source.get('cancel_amount', 0) or 0))
     return total
 
 
@@ -112,9 +124,6 @@ class ShiftEntry(models.Model):
     delivery_attachment_talabat = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
     delivery_attachment_tmdone = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
     delivery_attachment_callcenter = models.FileField(upload_to='delivery_attachments/%Y/%m/', blank=True, null=True)
-    # Sum of this entry's DeliveryCancellation rows. Stored here because recalculate()
-    # runs on save, before a brand-new entry has any related rows to read.
-    delivery_cancel_amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
 
     actual_total = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     expected_foodics = models.DecimalField(max_digits=12, decimal_places=3, default=0)
@@ -126,6 +135,11 @@ class ShiftEntry(models.Model):
     is_audited = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # Snapshot of the numbers exactly as the waiter submitted them — captured
+    # once, on the first save. Later saves (Audit's corrections) never touch
+    # this, so the Sales Review card can show "changed from X to Y" against it.
+    original_snapshot = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['-created_at']
@@ -148,12 +162,19 @@ class ShiftEntry(models.Model):
         self.visa_total = _visa_total_from_entries(self.visa_entries)
 
         gross_delivery = _delivery_total_from_data(self.delivery_data)
-        self.delivery_total = gross_delivery - Decimal(str(self.delivery_cancel_amount or 0))
+        self.delivery_total = gross_delivery - _delivery_cancel_total_from_data(self.delivery_data)
 
         actual_before_discount = self.cash_total + self.visa_total + self.delivery_total
         self.actual_total = actual_before_discount - Decimal(str(self.staff_discount or 0))
         # Daily Sales variance: what the branch sold (cash + visa) vs Foodics.
         self.variance = self.sales_actual - Decimal(str(self.expected_foodics or 0))
+
+    @property
+    def delivery_cancel_amount(self):
+        """Sum of every delivery source's cancel_amount — kept for templates that
+        already read this name (it used to be a stored field, one total shared
+        across sources; now each source carries its own cancel figure)."""
+        return _delivery_cancel_total_from_data(self.delivery_data)
 
     @property
     def sales_actual(self):
@@ -163,6 +184,17 @@ class ShiftEntry(models.Model):
 
     def save(self, *args, **kwargs):
         self.recalculate()
+        if not self.pk and not self.original_snapshot:
+            self.original_snapshot = {
+                'cash_counts': dict(self.cash_counts),
+                'cash_counts_aed': dict(self.cash_counts_aed),
+                'aed_exchange_rate': str(self.aed_exchange_rate),
+                'visa_entries': list(self.visa_entries),
+                'delivery_data': dict(self.delivery_data),
+                'staff_discount': str(self.staff_discount),
+                'cash_cancel_amount': str(self.cash_cancel_amount),
+                'petty_cash': str(self.petty_cash),
+            }
         if not self.reference_id:
             prefix = self.branch.code or f'BR{self.branch.id}'
             existing_count = ShiftEntry.objects.filter(branch=self.branch).count()
@@ -182,22 +214,6 @@ class VisaMachineFile(models.Model):
 
     def __str__(self):
         return f'Visa file for {self.serial or "unknown machine"} ({self.entry})'
-
-
-class DeliveryCancellation(models.Model):
-    """One cancelled delivery order: which company, how much, and its receipt.
-    An entry can have several (different companies, or the same one repeated)."""
-    shift_entry = models.ForeignKey(ShiftEntry, on_delete=models.CASCADE, related_name='delivery_cancellations')
-    source = models.CharField(max_length=20, choices=DELIVERY_SOURCES)
-    amount = models.DecimalField(max_digits=10, decimal_places=3, default=0)
-    attachment = models.FileField(upload_to='cancel_attachments/%Y/%m/', blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['id']
-
-    def __str__(self):
-        return f'{self.get_source_display()} cancel {self.amount} ({self.shift_entry})'
 
 
 class CollectorHandover(models.Model):
@@ -224,6 +240,10 @@ class CollectorHandover(models.Model):
     notes = models.TextField(blank=True)
     recounted_at = models.DateTimeField(auto_now=True)
 
+    # Snapshot of the collector's own first count — captured once, so a later
+    # correction by Audit can be shown as "changed from X to Y" against it.
+    original_snapshot = models.JSONField(default=dict, blank=True)
+
     def recalculate(self):
         omr = _cash_total_from_counts(self.cash_counts)
         aed = _aed_cash_total_from_counts(self.cash_counts_aed)
@@ -233,6 +253,11 @@ class CollectorHandover(models.Model):
 
     def save(self, *args, **kwargs):
         self.recalculate()
+        if not self.pk and not self.original_snapshot:
+            self.original_snapshot = {
+                'cash_counts': dict(self.cash_counts),
+                'cash_counts_aed': dict(self.cash_counts_aed),
+            }
         super().save(*args, **kwargs)
 
     def has_difference(self, threshold):
@@ -274,6 +299,9 @@ class ActivityLog(models.Model):
     username_snapshot = models.CharField(max_length=150, blank=True)
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)
     description = models.CharField(max_length=255, blank=True)
+    # A short summary of what actually changed in this action (fields
+    # corrected, the note written) — shown in the Audit History table.
+    details = models.TextField(blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -282,3 +310,14 @@ class ActivityLog(models.Model):
 
     def __str__(self):
         return f'{self.username_snapshot or "unknown"} - {self.get_action_display()} - {self.created_at}'
+
+    @property
+    def clean_details(self):
+        """`details` for display. Rows saved earlier start with 'Edited by <user>:'
+        / 'Corrected by <user>:' (or 'Recorded by <user>: …'); the Who column
+        already names the person, so that repeat is dropped here."""
+        import re
+        text = self.details or ''
+        text = re.sub(r'^(?:Edited|Corrected) by [^\n]*?:\s*\n', '', text)
+        text = re.sub(r'^Recorded by [^\n:]*?: ', 'Recorded: ', text)
+        return text

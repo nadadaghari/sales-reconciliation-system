@@ -2,7 +2,7 @@
 DENOMS = ['0.005', '0.01', '0.025', '0.05', '0.1', '0.5', '1', '5', '10', '20', '50']
 
 # AED (UAE Dirham) note denominations — for branches that also collect AED cash.
-AED_DENOMS = ['1', '5', '10', '20', '50', '100', '200', '500', '1000']
+AED_DENOMS = ['0.5', '1', '5', '10', '20', '50', '100', '200', '500', '1000']
 
 # Delivery / order sources shown on the paper form.
 DELIVERY_SOURCES = [

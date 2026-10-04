@@ -1,6 +1,6 @@
 import csv
 import io
-from datetime import timedelta
+from urllib.parse import urlencode
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
@@ -8,14 +8,17 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.core.cache import cache
+from django.core.exceptions import PermissionDenied
 from django.db.models import Sum
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from django.views.decorators.http import require_POST
 from .constants import DENOMS, AED_DENOMS, DELIVERY_SOURCES, SHIFT_CHOICES
 from .decorators import role_required
-from .models import Branch, ShiftEntry, CollectorHandover, UserProfile, VisaMachineFile, DeliveryCancellation, ActivityLog
+from .models import Branch, ShiftEntry, CollectorHandover, UserProfile, VisaMachineFile, ActivityLog
 
 
 def login_view(request):
@@ -76,21 +79,101 @@ def branch_login_view(request):
             log_activity(request, 'login_failed', description=f'branch code: {branch_code}, punch id: {punch_id}')
             messages.error(request, 'Invalid branch code, Punch ID, or password.')
             return redirect('login')
-        if not profile.user.is_active:
-            messages.error(request, 'This account is deactivated. Contact your admin.')
-            return redirect('login')
-
         if not profile.user.check_password(password):
             _register_failed_attempt(cache_key)
             log_activity(request, 'login_failed', description=f'branch code: {branch_code}, punch id: {punch_id}', username_override=profile.user.username)
             messages.error(request, 'Invalid branch code, Punch ID, or password.')
+            return redirect('login')
+        if not profile.user.is_active:
+            if profile.pending_approval:
+                messages.error(request, 'Your registration is waiting for admin approval. You can log in once it is approved.')
+            else:
+                messages.error(request, 'This account is deactivated. Contact your admin.')
             return redirect('login')
 
         _clear_attempts(cache_key)
         login(request, profile.user, backend='django.contrib.auth.backends.ModelBackend')
         log_activity(request, 'login_success', user=profile.user, description=f'branch: {branch.name}')
         return redirect('entry')
-    return render(request, 'salesapp/branch_login.html')
+    return render(request, 'salesapp/branch_login.html', {
+        'prefill_branch_code': request.GET.get('branch_code', '').strip()[:50],
+        'prefill_punch_id': request.GET.get('punch_id', '').strip()[:50],
+    })
+
+
+# A waiter who registers through the public link is active immediately — the
+# only gate is the branch code, checked against the code stored on that branch.
+# (Set to True to make new registrations wait for an admin to approve them.)
+SELF_REGISTRATION_NEEDS_APPROVAL = False
+REGISTER_MAX_ATTEMPTS = 10
+
+
+def register_view(request):
+    """Public page where a waiter registers themselves: name, Punch ID, branch,
+    the branch's code (proves they belong there) and a password. The branch
+    code is checked on the server, and failed tries are rate-limited per IP."""
+    if request.user.is_authenticated:
+        return _redirect_for_role(request.user)
+
+    branches = Branch.objects.filter(is_active=True).order_by('name')
+    form = {'name': '', 'punch_id': '', 'branch': '', 'branch_code': ''}
+    done = None
+    error = None
+
+    if request.method == 'POST':
+        form = {
+            'name': request.POST.get('name', '').strip(),
+            'punch_id': request.POST.get('punch_id', '').strip(),
+            'branch': request.POST.get('branch', '').strip(),
+            'branch_code': request.POST.get('branch_code', '').strip(),
+        }
+        password = request.POST.get('password', '')
+        password2 = request.POST.get('password2', '')
+        cache_key = f'register_attempts:{_client_ip(request)}'
+        branch = branches.filter(id=form['branch']).first() if form['branch'].isdigit() else None
+
+        if cache.get(cache_key, 0) >= REGISTER_MAX_ATTEMPTS:
+            error = 'Too many attempts. Please wait a few minutes and try again.'
+        elif not (form['name'] and form['punch_id'] and branch and password):
+            error = 'Please fill in every field.'
+        elif not branch.code:
+            error = f'{branch.name} has no branch code saved yet. Please ask your admin.'
+        elif form['branch_code'] and form['branch_code'].lower() != branch.code.lower():
+            cache.set(cache_key, cache.get(cache_key, 0) + 1, LOGIN_LOCKOUT_SECONDS)
+            error = 'That branch code does not match the selected branch.'
+        elif UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=form['punch_id']).exists():
+            error = f'{branch.name} already has someone registered with Punch ID "{form["punch_id"]}". Check your Punch ID, or ask your admin.'
+        elif len(password) < 8:
+            error = 'Please choose a password of at least 8 characters.'
+        elif password != password2:
+            error = 'The two passwords do not match.'
+        else:
+            base_username = f'waiter_{branch.code or branch.id}'.lower().replace(' ', '')
+            username, suffix = base_username, 1
+            while User.objects.filter(username=username).exists():
+                suffix += 1
+                username = f'{base_username}_{suffix}'
+            needs_approval = SELF_REGISTRATION_NEEDS_APPROVAL
+            user = User.objects.create_user(username=username)
+            user.set_password(password)  # hashed, never stored in plain text
+            user.is_active = not needs_approval
+            user.save()
+            UserProfile.objects.create(
+                user=user, role='waiter', branch=branch,
+                head_cashier_name=form['name'], punch_id=form['punch_id'],
+                pending_approval=needs_approval,
+            )
+            log_activity(request, 'user_created', username_override=username,
+                         description=f'self-registered waiter "{form["name"]}" at {branch.name} ({username})')
+            if needs_approval:
+                done = 'pending'
+            else:
+                messages.success(request, f'Welcome {form["name"]}! You are registered — log in below.')
+                return redirect(reverse('login') + '?' + urlencode({'branch_code': branch.code, 'punch_id': form['punch_id']}))
+
+    return render(request, 'salesapp/register.html', {
+        'branches': branches, 'form': form, 'error': error, 'done': done,
+    })
 
 
 @require_POST
@@ -105,8 +188,6 @@ def logout_view(request):
 # difference. (Deliberately NOT settings.VARIANCE_THRESHOLD, which is far too
 # loose for cash and would let a shortage of a few rials pass as "matched".)
 CASH_TOLERANCE = Decimal('0.001')
-# Shifts whose cash the collector hasn't picked up after this many days are flagged.
-COLLECTION_OVERDUE_DAYS = 5
 
 
 def _dec(value, default='0'):
@@ -128,7 +209,7 @@ def _redirect_for_role(user):
         return redirect('create_user')
     if profile.role == 'collector':
         return redirect('collector')
-    if profile.role == 'audit':
+    if profile.role in ('audit', 'manager'):
         return redirect('dashboard')
     return redirect('entry')
 
@@ -177,49 +258,272 @@ def _save_visa_files(entry, rows):
             VisaMachineFile.objects.create(entry=entry, serial=row['serial'], file=row['file'])
 
 
-def _parse_delivery_cancellations(request):
-    """Cancelled delivery orders: any number of rows, each with a company, an
-    amount and its own receipt. delivery_cancel_id[] is only sent by the edit
-    page (existing rows carry their id, new rows send an empty one)."""
-    sources = request.POST.getlist('delivery_cancel_source[]')
-    amounts = request.POST.getlist('delivery_cancel_amount[]')
-    row_ids = request.POST.getlist('delivery_cancel_row[]')
-    existing_ids = request.POST.getlist('delivery_cancel_id[]')
-    valid_sources = {key for key, _label in DELIVERY_SOURCES}
-    rows = []
-    for idx, (source, amount, row_id) in enumerate(zip(sources, amounts, row_ids)):
-        amount = _dec(amount)
-        if source not in valid_sources or amount <= 0:
-            continue
-        rows.append({
-            'id': existing_ids[idx] if idx < len(existing_ids) and existing_ids[idx] else None,
-            'source': source,
-            'amount': amount,
-            'file': request.FILES.get(f'delivery_cancel_attachment_{row_id}'),
-        })
-    return rows
+def _safe_next(request):
+    """A "take me back to where I was" address, sent by the page that linked
+    here. Only paths on this site are honoured — anything else is ignored, so
+    the link can't be abused to bounce people to another website."""
+    nxt = request.POST.get('next') or request.GET.get('next') or ''
+    if nxt and url_has_allowed_host_and_scheme(nxt, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        return nxt
+    return ''
 
 
-def _delivery_cancel_total(rows):
-    return sum((row['amount'] for row in rows), Decimal('0'))
+def _reopen_url(request, base_path, entry_id):
+    """The same report again after a save, keeping whatever filters were active
+    (branch, dates, shifts) so Back lands on the list the user was working in."""
+    params = request.GET.copy()
+    params['entry_id'] = entry_id
+    return f"{base_path}?{params.urlencode()}"
 
 
-def _save_delivery_cancellations(entry, rows):
-    """Make the entry's DeliveryCancellation rows match the submitted list:
-    create new ones, update kept ones (keeping an old receipt unless a new one
-    was uploaded) and delete the ones that were removed."""
-    keep_ids = []
-    for row in rows:
-        obj = entry.delivery_cancellations.filter(id=row['id']).first() if row['id'] else None
-        if obj is None:
-            obj = DeliveryCancellation(shift_entry=entry)
-        obj.source = row['source']
-        obj.amount = row['amount']
-        if row['file']:
-            obj.attachment = row['file']
-        obj.save()
-        keep_ids.append(obj.id)
-    entry.delivery_cancellations.exclude(id__in=keep_ids).delete()
+def _cash_subtotals(denom_rows, aed_rows):
+    """OMR subtotal, and the AED subtotal converted to OMR — for the cash cards
+    that show OMR beside AED."""
+    omr = sum((Decimal(str(r['amount'])) for r in denom_rows or []), Decimal('0'))
+    aed = sum((Decimal(str(r['omr_equivalent'])) for r in aed_rows or []), Decimal('0'))
+    return {'cash_omr_total': omr, 'cash_aed_in_omr': aed}
+
+
+def _entry_cash_context(entry):
+    """The waiter's cash report, broken down by denomination for display."""
+    aed_rate = float(entry.aed_exchange_rate or 0)
+    entry_denoms = [
+        {'denom': d, 'count': entry.cash_counts.get(d, 0), 'amount': float(d) * int(entry.cash_counts.get(d, 0) or 0)}
+        for d in DENOMS
+    ]
+    entry_aed_denoms = [
+        {
+            'denom': d,
+            'count': entry.cash_counts_aed.get(d, 0),
+            'amount': float(d) * int(entry.cash_counts_aed.get(d, 0) or 0),
+            'omr_equivalent': float(d) * int(entry.cash_counts_aed.get(d, 0) or 0) * aed_rate,
+        }
+        for d in AED_DENOMS if entry.cash_counts_aed.get(d, 0)
+    ]
+    return {'entry_denoms': entry_denoms, 'entry_aed_denoms': entry_aed_denoms,
+            **_cash_subtotals(entry_denoms, entry_aed_denoms)}
+
+
+def _handover_cash_context(handover):
+    """The collector's count, broken down the same way (only denominations actually counted)."""
+    aed_rate = float(handover.shift_entry.aed_exchange_rate or 0)
+    denoms = [
+        {'denom': d, 'count': handover.cash_counts.get(d, 0), 'amount': float(d) * int(handover.cash_counts.get(d, 0) or 0)}
+        for d in DENOMS if handover.cash_counts.get(d, 0)
+    ]
+    aed = [
+        {
+            'denom': d,
+            'count': handover.cash_counts_aed.get(d, 0),
+            'amount': float(d) * int(handover.cash_counts_aed.get(d, 0) or 0),
+            'omr_equivalent': float(d) * int(handover.cash_counts_aed.get(d, 0) or 0) * aed_rate,
+        }
+        for d in AED_DENOMS if handover.cash_counts_aed.get(d, 0)
+    ]
+    subtotals = _cash_subtotals(denoms, aed)
+    return {'handover_denoms': denoms, 'handover_aed_denoms': aed,
+            'handover_omr_total': subtotals['cash_omr_total'], 'handover_aed_in_omr': subtotals['cash_aed_in_omr']}
+
+
+def _shift_snapshot(entry):
+    """The same shape as ShiftEntry.original_snapshot, built from an entry's
+    CURRENT state — used to capture 'before' just ahead of applying an edit,
+    so that edit's own diff can be computed (regardless of what the very
+    first waiter submission looked like)."""
+    return {
+        'cash_counts': dict(entry.cash_counts),
+        'cash_counts_aed': dict(entry.cash_counts_aed),
+        'visa_entries': list(entry.visa_entries),
+        'delivery_data': dict(entry.delivery_data),
+        'staff_discount': str(entry.staff_discount),
+        'cash_cancel_amount': str(entry.cash_cancel_amount),
+        'petty_cash': str(entry.petty_cash),
+    }
+
+
+def _handover_snapshot(handover):
+    return {
+        'cash_counts': dict(handover.cash_counts),
+        'cash_counts_aed': dict(handover.cash_counts_aed),
+    }
+
+
+def _decimals_differ(old_str, new_value):
+    try:
+        return Decimal(str(old_str or '0')) != Decimal(str(new_value))
+    except Exception:
+        return str(old_str) != str(new_value)
+
+
+def _shift_field_diffs(snap, entry):
+    """Per-field 'changed from X to Y' notes, comparing entry's current
+    numbers against an arbitrary earlier snapshot (same shape as
+    ShiftEntry.original_snapshot). Empty if snap is empty or nothing differs."""
+    changes = {}
+    if not snap:
+        return changes
+    for d in DENOMS:
+        old = int(snap.get('cash_counts', {}).get(d, 0) or 0)
+        new = int(entry.cash_counts.get(d, 0) or 0)
+        if old != new:
+            changes[f'denom_{d}'] = f'Changed from {old} to {new}'
+    for d in AED_DENOMS:
+        old = int(snap.get('cash_counts_aed', {}).get(d, 0) or 0)
+        new = int(entry.cash_counts_aed.get(d, 0) or 0)
+        if old != new:
+            changes[f'denom_aed_{d}'] = f'Changed from {old} to {new}'
+    if _decimals_differ(snap.get('staff_discount', '0'), entry.staff_discount):
+        changes['staff_discount'] = f"Changed from {snap.get('staff_discount', '0')} to {entry.staff_discount}"
+    if _decimals_differ(snap.get('cash_cancel_amount', '0'), entry.cash_cancel_amount):
+        changes['cash_cancel_amount'] = f"Changed from {snap.get('cash_cancel_amount', '0')} to {entry.cash_cancel_amount}"
+    if _decimals_differ(snap.get('petty_cash', '0'), entry.petty_cash):
+        changes['petty_cash'] = f"Changed from {snap.get('petty_cash', '0')} to {entry.petty_cash}"
+    for key, _label in DELIVERY_SOURCES:
+        old_row = snap.get('delivery_data', {}).get(key, {})
+        new_row = entry.delivery_data.get(key, {})
+        for field in ['orders', 'amount', 'cancel_orders', 'cancel_amount']:
+            old_v = old_row.get(field, 0)
+            new_v = new_row.get(field, 0)
+            if old_v != new_v:
+                changes[f'{field}_{key}'] = f'Changed from {old_v} to {new_v}'
+    old_visa_total = sum(float(v.get('amount', 0)) for v in snap.get('visa_entries', []))
+    new_visa_total = sum(float(v.get('amount', 0)) for v in entry.visa_entries)
+    if abs(old_visa_total - new_visa_total) > 0.0001 or len(snap.get('visa_entries', [])) != len(entry.visa_entries):
+        changes['visa_total'] = f'Changed from {old_visa_total:.3f} to {new_visa_total:.3f}'
+    return changes
+
+
+def _shift_field_diff_lines_sales(snap, entry):
+    """Daily Sales section only: Discount, Visa, Delivery. Named per the card
+    the field lives in, so the history line reads like the page does."""
+    diffs = _shift_field_diffs(snap, entry)
+    lines = []
+    if 'staff_discount' in diffs:
+        lines.append('Discount: ' + diffs['staff_discount'].replace('Changed from ', '').replace(' to ', ' → '))
+    if 'visa_total' in diffs:
+        lines.append('Visa: ' + diffs['visa_total'].replace('Changed from ', '').replace(' to ', ' → '))
+    for key, source_label in DELIVERY_SOURCES:
+        for field, field_label in [('orders', 'orders'), ('amount', 'amount'), ('cancel_orders', 'cancelled orders'), ('cancel_amount', 'cancelled amount')]:
+            k = f'{field}_{key}'
+            if k in diffs:
+                lines.append(f'Delivery — {source_label} {field_label}: ' + diffs[k].replace('Changed from ', '').replace(' to ', ' → '))
+    return lines
+
+
+def _shift_field_diff_lines_cash(snap, entry):
+    """Cash section only: OMR/AED counts, cash cancellation, petty cash."""
+    diffs = _shift_field_diffs(snap, entry)
+    lines = []
+    for d in DENOMS:
+        if f'denom_{d}' in diffs:
+            lines.append('Cash ' + d + ': ' + diffs[f'denom_{d}'].replace('Changed from ', '').replace(' to ', ' → '))
+    for d in AED_DENOMS:
+        if f'denom_aed_{d}' in diffs:
+            lines.append('AED ' + d + ': ' + diffs[f'denom_aed_{d}'].replace('Changed from ', '').replace(' to ', ' → '))
+    for field_key, label in [('cash_cancel_amount', 'Cash cancelled'), ('petty_cash', 'Petty cash')]:
+        if field_key in diffs:
+            lines.append(f'{label}: ' + diffs[field_key].replace('Changed from ', '').replace(' to ', ' → '))
+    return lines
+
+
+def _handover_field_diff_lines(snap, handover):
+    lines = []
+    if not snap:
+        return lines
+    for d in DENOMS:
+        old = int(snap.get('cash_counts', {}).get(d, 0) or 0)
+        new = int(handover.cash_counts.get(d, 0) or 0)
+        if old != new:
+            lines.append(f'Cash {d}: {old} → {new}')
+    for d in AED_DENOMS:
+        old = int(snap.get('cash_counts_aed', {}).get(d, 0) or 0)
+        new = int(handover.cash_counts_aed.get(d, 0) or 0)
+        if old != new:
+            lines.append(f'AED {d}: {old} → {new}')
+    return lines
+
+
+def _compute_shift_changes(entry):
+    """Per-field 'changed from X to Y' notes, comparing the entry's current
+    numbers to the waiter's original submission. Empty if nothing was ever
+    corrected, or if the entry predates this feature (no snapshot saved)."""
+    return _shift_field_diffs(entry.original_snapshot or {}, entry)
+
+
+def _compute_handover_changes(handover):
+    """Same idea as _compute_shift_changes, for the collector's own count."""
+    snap = handover.original_snapshot or {}
+    changes = {}
+    if not snap:
+        return changes
+    for d in DENOMS:
+        old = int(snap.get('cash_counts', {}).get(d, 0) or 0)
+        new = int(handover.cash_counts.get(d, 0) or 0)
+        if old != new:
+            changes[f'cdenom_{d}'] = f'Changed from {old} to {new}'
+    for d in AED_DENOMS:
+        old = int(snap.get('cash_counts_aed', {}).get(d, 0) or 0)
+        new = int(handover.cash_counts_aed.get(d, 0) or 0)
+        if old != new:
+            changes[f'cdenom_aed_{d}'] = f'Changed from {old} to {new}'
+    return changes
+
+
+def _build_stepper(entry, handover, review_log):
+    """The four stages a shift moves through. 'current' marks the first one
+    not yet done — that's the stage Audit still needs to act on. Each step
+    carries the id of the card it should jump to when clicked."""
+    steps = [
+        {'key': 'submitted', 'label': 'Waiter Submitted', 'anchor': 'stepWaiterSubmitted',
+         'done': True, 'timestamp': entry.created_at},
+        {'key': 'sales_reviewed', 'label': 'Sales Reviewed', 'anchor': 'stepSalesReviewed',
+         'done': entry.is_audited, 'timestamp': review_log.created_at if review_log else None},
+        {'key': 'cash_collected', 'label': 'Cash Collected', 'anchor': 'stepCashCollected',
+         'done': handover is not None, 'timestamp': handover.recounted_at if handover else None},
+        {'key': 'cash_reconciled', 'label': 'Cash Reconciled', 'anchor': 'stepCashCollected',
+         'done': bool(handover and handover.reconciled),
+         'timestamp': handover.reconciled_at if (handover and handover.reconciled) else None},
+    ]
+    current_index = next((i for i, s in enumerate(steps) if not s['done']), None)
+    for i, s in enumerate(steps):
+        s['current'] = (i == current_index)
+    return {'steps': steps, 'complete': current_index is None}
+
+
+def _apply_waiter_financials(request, entry):
+    """Applies the cash/visa/delivery/discount fields from a POST to an entry.
+    Shared by the waiter's own edit page and by Audit's inline correction on
+    the Sales Review card, so a fix made in either place saves the same way."""
+    entry.staff_discount = _dec(request.POST.get('staff_discount'))
+    entry.petty_cash = _dec(request.POST.get('petty_cash'))
+    entry.cash_counts = {d: int(request.POST.get(f'denom_{d}', 0) or 0) for d in DENOMS}
+    entry.cash_counts_aed = {d: int(request.POST.get(f'denom_aed_{d}', 0) or 0) for d in AED_DENOMS}
+    entry.aed_exchange_rate = _dec(request.POST.get('aed_exchange_rate'), default='0.1000')
+    entry.cash_cancel_amount = _dec(request.POST.get('cash_cancel_amount'))
+
+    visa_rows = _parse_visa_rows(request)
+    entry.visa_entries = [{'serial': r['serial'], 'amount': float(r['amount'])} for r in visa_rows]
+
+    delivery_data = {}
+    for key, _label in DELIVERY_SOURCES:
+        delivery_data[key] = {
+            'orders': int(request.POST.get(f'orders_{key}', 0) or 0),
+            'amount': float(_dec(request.POST.get(f'amount_{key}', 0))),
+            'cancel_orders': int(request.POST.get(f'cancel_orders_{key}', 0) or 0),
+            'cancel_amount': float(_dec(request.POST.get(f'cancel_amount_{key}', 0))),
+        }
+    entry.delivery_data = delivery_data
+
+    if request.FILES.get('discount_attachment'):
+        entry.staff_discount_attachment = request.FILES['discount_attachment']
+    if request.FILES.get('cash_cancel_attachment'):
+        entry.cash_cancel_attachment = request.FILES['cash_cancel_attachment']
+    for key, _label in DELIVERY_SOURCES:
+        uploaded = request.FILES.get(f'delivery_attachment_{key}')
+        if uploaded:
+            setattr(entry, f'delivery_attachment_{key}', uploaded)
+
+    return visa_rows
 
 
 def _build_visa_rows(entry):
@@ -247,11 +551,12 @@ def _client_ip(request):
     return request.META.get('REMOTE_ADDR')
 
 
-def log_activity(request, action, description='', user=None, username_override=None):
+def log_activity(request, action, description='', user=None, username_override=None, details=''):
     """Record one line in the audit trail. Pass `user` explicitly right
     after a successful login (before/without relying on request.user), or
     `username_override` for failed-login attempts where there's no user
-    object at all — just the username someone typed in."""
+    object at all — just the username someone typed in. `details` is a short
+    human-readable summary of what actually changed, shown in Audit History."""
     actor = user or (request.user if request.user.is_authenticated else None)
     snapshot = username_override or (actor.username if actor else '')
     ActivityLog.objects.create(
@@ -259,6 +564,7 @@ def log_activity(request, action, description='', user=None, username_override=N
         username_snapshot=snapshot,
         action=action,
         description=description[:255],
+        details=details,
         ip_address=_client_ip(request),
     )
 
@@ -296,7 +602,6 @@ def entry_view(request):
 
         visa_rows = _parse_visa_rows(request)
         visa_entries = [{'serial': r['serial'], 'amount': float(r['amount'])} for r in visa_rows]
-        delivery_cancel_rows = _parse_delivery_cancellations(request)
 
         delivery_data = {}
         for key, _label in DELIVERY_SOURCES:
@@ -320,7 +625,6 @@ def entry_view(request):
             visa_entries=visa_entries,
             cash_cancel_amount=_dec(request.POST.get('cash_cancel_amount')),
             delivery_data=delivery_data,
-            delivery_cancel_amount=_delivery_cancel_total(delivery_cancel_rows),
             notes=request.POST.get('notes', ''),
             # expected_foodics is set later by Audit, not by the waiter.
         )
@@ -336,7 +640,6 @@ def entry_view(request):
                 setattr(entry, f'delivery_attachment_{key}', uploaded)
         entry.save()
         _save_visa_files(entry, visa_rows)
-        _save_delivery_cancellations(entry, delivery_cancel_rows)
 
         return redirect(f"/?submitted={entry.reference_id}")
 
@@ -365,7 +668,15 @@ def collector_view(request):
         cash_counts = {d: int(request.POST.get(f'cdenom_{d}', 0) or 0) for d in DENOMS}
         cash_counts_aed = {d: int(request.POST.get(f'cdenom_aed_{d}', 0) or 0) for d in AED_DENOMS}
 
-        handover, _ = CollectorHandover.objects.get_or_create(shift_entry=shift_entry)
+        handover = CollectorHandover.objects.filter(shift_entry=shift_entry).first()
+        is_new = handover is None
+        if is_new:
+            handover = CollectorHandover(shift_entry=shift_entry)
+        before_snap = _handover_snapshot(handover)
+        if not is_new and not handover.original_snapshot:
+            # Older record saved before baselines existed: treat the count as it
+            # stood just before this edit as the baseline, so this edit is flagged.
+            handover.original_snapshot = before_snap
         handover.collector_name = request.POST.get('collector_name', '').strip()
         handover.cash_counts = cash_counts
         handover.cash_counts_aed = cash_counts_aed
@@ -375,9 +686,19 @@ def collector_view(request):
         handover.reconciled_at = None
         handover.save()
 
-        log_activity(request, 'handover_saved', description=shift_entry.reference_id)
+        diff_lines = _handover_field_diff_lines(before_snap, handover)
+        by_audit = request.user.profile.role in ('audit', 'admin')
+        total = f'{Decimal(str(handover.cash_total)):.3f}'
+        # The Who column already names the person, so the details carry only what changed.
+        if is_new:
+            details = f'Recorded: {total} RO' if by_audit else f'Collector count: {total} RO'
+        elif diff_lines:
+            details = '\n'.join(diff_lines)
+        else:
+            details = f'Saved again, counts unchanged: {total} RO'
+        log_activity(request, 'handover_saved', description=shift_entry.reference_id, details=details)
         messages.success(request, 'Collector handover saved.')
-        return redirect(f"/collector/?entry_id={entry_id}")
+        return redirect(_safe_next(request) or _reopen_url(request, '/collector/', entry_id))
 
     selected_entry = None
     selected_handover = None
@@ -391,12 +712,25 @@ def collector_view(request):
             return redirect(f"/collector/?entry_id={matched.id}")
         messages.error(request, f'No entry found with reference ID "{search_ref}".')
 
+    handover_changes = {}
+    shift_changes = {}
+    cash_history = None
     if entry_id:
         selected_entry = get_object_or_404(ShiftEntry, id=entry_id)
         selected_handover = getattr(selected_entry, 'collector', None)
+        if selected_handover is not None:
+            handover_changes = _compute_handover_changes(selected_handover)
+        shift_changes = _compute_shift_changes(selected_entry)
+        cash_history = list(
+            ActivityLog.objects.filter(
+                description=selected_entry.reference_id,
+                action__in=['handover_saved', 'cash_reconciled', 'entry_edited'],
+            ).order_by('-created_at')
+        )
 
     entry_denoms = None
     entry_aed_denoms = None
+    entry_visa_rows = None
     if selected_entry:
         entry_denoms = [
             {'denom': d, 'count': selected_entry.cash_counts.get(d, 0), 'amount': float(d) * int(selected_entry.cash_counts.get(d, 0) or 0)}
@@ -412,6 +746,7 @@ def collector_view(request):
             }
             for d in AED_DENOMS if selected_entry.cash_counts_aed.get(d, 0)
         ]
+        entry_visa_rows = _build_visa_rows(selected_entry)
 
     shift_filter = request.GET.getlist('shift_filter')
     branch_filter = request.GET.get('branch_filter', '').strip()
@@ -474,7 +809,10 @@ def collector_view(request):
             previous_date = e.date
         group['date_group_count'] = date_group + 1
 
+    cash_subtotals = _cash_subtotals(entry_denoms, entry_aed_denoms)
+
     context = {
+        **cash_subtotals,
         'all_entries': all_entries_qs,
         'branch_groups': branch_groups,
         'shift_filter': shift_filter,
@@ -488,57 +826,129 @@ def collector_view(request):
         'selected_handover': selected_handover,
         'entry_denoms': entry_denoms,
         'entry_aed_denoms': entry_aed_denoms,
+        'entry_visa_rows': entry_visa_rows,
         'aed_denoms': AED_DENOMS,
-        'cash_tolerance': CASH_TOLERANCE,
         'delivery_sources': DELIVERY_SOURCES,
+        'cash_tolerance': CASH_TOLERANCE,
+        'handover_changes': handover_changes,
+        'shift_changes': shift_changes,
+        'cash_history': cash_history,
+        'next_url': _safe_next(request),
         'search_ref': search_ref,
         'active_tab': 'collector',
     }
     return render(request, 'salesapp/collector.html', context)
 
 
-@role_required('audit', 'admin')
+@role_required('audit', 'manager', 'admin')
 def dashboard_view(request):
+    """The single Audit workspace. Every shift moves through four stages —
+    Waiter Submitted, Sales Reviewed, Cash Collected, Cash Reconciled — shown
+    as a stepper when the shift is opened. There are no separate tabs: the
+    sales review (Foodics) and the cash reconciliation both live on this one
+    page, one after the other in the same report."""
     threshold = Decimal(str(settings.VARIANCE_THRESHOLD))
+    is_viewer = request.user.profile.role == 'manager'
 
     if request.method == 'POST':
+        if is_viewer:
+            raise PermissionDenied('Managers have view-only access.')
         entry_id = request.POST.get('entry_id')
         entry = get_object_or_404(ShiftEntry, id=entry_id)
+        before_snap = _shift_snapshot(entry)
+        if not entry.original_snapshot:
+            entry.original_snapshot = before_snap   # legacy shift: baseline = how it stood before this edit
+        old_foodics = entry.expected_foodics
+        old_notes = entry.audit_notes
+        old_date, old_shift, old_accountant = entry.date, entry.shift, entry.accountant
+        if request.POST.get('date'):
+            entry.date = request.POST.get('date')
+        if request.POST.get('shift'):
+            entry.shift = request.POST.get('shift')
+        entry.accountant = request.POST.get('accountant', '').strip()
+        visa_rows = _apply_waiter_financials(request, entry)
         entry.audit_notes = request.POST.get('audit_notes', '').strip()
         if 'expected_foodics' in request.POST:
             entry.expected_foodics = _dec(request.POST.get('expected_foodics'))
         entry.is_audited = True
         entry.save()  # full save so recalculate() persists the updated variance too
-        log_activity(request, 'entry_audited', description=entry.reference_id)
-        messages.success(request, f'{entry.reference_id} daily sales review saved.')
-        return redirect(f"/dashboard/?entry_id={entry_id}")
+        _save_visa_files(entry, visa_rows)
+        handover = getattr(entry, 'collector', None)
+        if handover is not None:
+            handover.save()  # re-derive the cash difference from any corrected figures
+
+        # Daily Sales and Cash never share a history line — even though Audit can
+        # correct both from this one page, each gets logged under its own action.
+        sales_lines = _shift_field_diff_lines_sales(before_snap, entry)
+        if str(old_date) != str(entry.date):
+            sales_lines.append(f'Date: {old_date} → {entry.date}')
+        if old_shift != entry.shift:
+            sales_lines.append(f'Shift: {old_shift} → {entry.shift}')
+        if old_accountant != entry.accountant:
+            sales_lines.append(f'Accountant: "{old_accountant}" → "{entry.accountant}"')
+        if _decimals_differ(str(old_foodics), entry.expected_foodics):
+            sales_lines.append(f'Foodics: {Decimal(str(old_foodics)):.3f} → {Decimal(str(entry.expected_foodics)):.3f}')
+        if entry.audit_notes and entry.audit_notes != old_notes:
+            sales_lines.append(f'Note: "{entry.audit_notes}"')
+        sales_details = '\n'.join(sales_lines) if sales_lines else 'No numbers changed.'
+        log_activity(request, 'entry_audited', description=entry.reference_id, details=sales_details)
+
+        cash_lines = _shift_field_diff_lines_cash(before_snap, entry)
+        if cash_lines:
+            log_activity(request, 'entry_edited', description=entry.reference_id, details='\n'.join(cash_lines))
+
+        messages.success(request, f'{entry.reference_id} sales review approved.')
+        return redirect(_reopen_url(request, '/dashboard/', entry_id))
 
     selected_entry = None
     selected_handover = None
+    review_log = None
     entry_id = request.GET.get('entry_id')
     if entry_id:
         selected_entry = get_object_or_404(ShiftEntry, id=entry_id)
         selected_handover = getattr(selected_entry, 'collector', None)
+        if selected_entry.is_audited:
+            review_log = ActivityLog.objects.filter(
+                action='entry_audited', description=selected_entry.reference_id
+            ).order_by('-created_at').first()
 
-    entry_denoms = None
-    entry_aed_denoms = None
-    entry_visa_rows = None
+    entry_denoms = entry_aed_denoms = entry_visa_rows = None
+    handover_denoms = handover_aed_denoms = None
+    handover_omr_total = handover_aed_in_omr = None
+    selected_has_difference = False
+    stepper = None
+    shift_changes = {}
+    handover_changes = {}
     if selected_entry:
-        entry_denoms = [
-            {'denom': d, 'count': selected_entry.cash_counts.get(d, 0), 'amount': float(d) * int(selected_entry.cash_counts.get(d, 0) or 0)}
-            for d in DENOMS
-        ]
-        aed_rate = float(selected_entry.aed_exchange_rate or 0)
-        entry_aed_denoms = [
-            {
-                'denom': d,
-                'count': selected_entry.cash_counts_aed.get(d, 0),
-                'amount': float(d) * int(selected_entry.cash_counts_aed.get(d, 0) or 0),
-                'omr_equivalent': float(d) * int(selected_entry.cash_counts_aed.get(d, 0) or 0) * aed_rate,
-            }
-            for d in AED_DENOMS if selected_entry.cash_counts_aed.get(d, 0)
-        ]
+        cash_ctx = _entry_cash_context(selected_entry)
+        entry_denoms = cash_ctx['entry_denoms']
+        entry_aed_denoms = cash_ctx['entry_aed_denoms']
         entry_visa_rows = _build_visa_rows(selected_entry)
+        shift_changes = _compute_shift_changes(selected_entry)
+        if selected_handover is not None:
+            h_ctx = _handover_cash_context(selected_handover)
+            handover_denoms = h_ctx['handover_denoms']
+            handover_aed_denoms = h_ctx['handover_aed_denoms']
+            handover_omr_total = h_ctx['handover_omr_total']
+            handover_aed_in_omr = h_ctx['handover_aed_in_omr']
+            selected_has_difference = selected_handover.has_difference(CASH_TOLERANCE)
+            handover_changes = _compute_handover_changes(selected_handover)
+        stepper = _build_stepper(selected_entry, selected_handover, review_log)
+
+    sales_history = None
+    cash_history = None
+    if selected_entry:
+        sales_history = list(
+            ActivityLog.objects.filter(
+                description=selected_entry.reference_id, action='entry_audited',
+            ).order_by('-created_at')
+        )
+        cash_history = list(
+            ActivityLog.objects.filter(
+                description=selected_entry.reference_id,
+                action__in=['handover_saved', 'cash_reconciled', 'entry_edited'],
+            ).order_by('-created_at')
+        )
 
     qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=False)
 
@@ -561,11 +971,17 @@ def dashboard_view(request):
 
     branch_groups_map = {}
     for e in qs:
-        # Daily Sales review is about sales only (cash + visa vs Foodics); the
-        # collector's cash count is a separate stage handled in Cash Reconciliation.
         foodics_entered = e.expected_foodics != 0
         has_issue = foodics_entered and abs(e.variance) > threshold
-        simple_status = 'reviewed' if e.is_audited else 'pending'
+        handover = getattr(e, 'collector', None)
+        if not e.is_audited:
+            stage = 'awaiting_sales'
+        elif handover is None:
+            stage = 'awaiting_collection'
+        elif not handover.reconciled:
+            stage = 'awaiting_cash_approval'
+        else:
+            stage = 'complete'
 
         group = branch_groups_map.setdefault(e.branch_id, {
             'branch': e.branch,
@@ -573,7 +989,7 @@ def dashboard_view(request):
             'total_variance': Decimal('0'),
             'total_actual': Decimal('0'),
         })
-        group['rows'].append({'entry': e, 'simple_status': simple_status, 'has_issue': has_issue})
+        group['rows'].append({'entry': e, 'stage': stage, 'has_issue': has_issue})
         group['total_variance'] += e.variance
         group['total_actual'] += e.sales_actual
 
@@ -594,6 +1010,9 @@ def dashboard_view(request):
         group['date_group_count'] = date_group + 1
 
     context = {
+        'review_log': review_log,
+        'variance_threshold': threshold,
+        'foodics_flagged': bool(selected_entry and selected_entry.expected_foodics != 0 and abs(selected_entry.variance) > threshold),
         'branch_groups': branch_groups,
         'shift_filter': shift_filter,
         'shift_choices': SHIFT_CHOICES,
@@ -602,12 +1021,24 @@ def dashboard_view(request):
         'date_to': date_to,
         'search_ref': search_ref,
         'denoms': DENOMS,
+        'aed_denoms': AED_DENOMS,
         'delivery_sources': DELIVERY_SOURCES,
         'selected_entry': selected_entry,
+        'is_viewer': is_viewer,
         'selected_handover': selected_handover,
+        'selected_has_difference': selected_has_difference,
         'entry_denoms': entry_denoms,
         'entry_aed_denoms': entry_aed_denoms,
         'entry_visa_rows': entry_visa_rows,
+        'handover_denoms': handover_denoms,
+        'handover_aed_denoms': handover_aed_denoms,
+        'handover_omr_total': handover_omr_total,
+        'handover_aed_in_omr': handover_aed_in_omr,
+        'stepper': stepper,
+        'sales_history': sales_history,
+        'cash_history': cash_history,
+        'shift_changes': shift_changes,
+        'handover_changes': handover_changes,
         'active_tab': 'dashboard',
     }
     return render(request, 'salesapp/dashboard.html', context)
@@ -693,6 +1124,7 @@ def create_user_view(request):
     context = {
         'branches': branches_info,
         'users': users_list,
+        'pending_users': [u for u in users_list if getattr(getattr(u, 'profile', None), 'pending_approval', False)],
         'active_tab': 'users',
     }
     return render(request, 'salesapp/create_user.html', context)
@@ -834,6 +1266,117 @@ def import_branches_view(request):
     return redirect('add_branch')
 
 
+@role_required('audit', 'manager', 'admin')
+def daily_sales_report_view(request):
+    """Daily Sales report: a card with the amount for every item, and under it
+    one full table with every shift and every field.
+    The cards (and the table's total row) count only COMPLETE shifts — Daily
+    Sales items use shifts whose sales review is approved; Cash items use
+    shifts whose cash reconciliation is approved. Shifts still waiting are
+    listed in the table (greyed out) and join the totals the moment they complete."""
+    from .models import _aed_cash_total_from_counts
+
+    first_load = not request.GET
+    today = timezone.localdate()
+    date_from = request.GET.get('date_from', '').strip() if not first_load else today.replace(day=1).isoformat()
+    date_to = request.GET.get('date_to', '').strip() if not first_load else today.isoformat()
+    branch_id = request.GET.get('branch', '').strip()
+    shift_filter = request.GET.getlist('shift')
+
+    qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=False)
+    if date_from:
+        qs = qs.filter(date__gte=date_from)
+    if date_to:
+        qs = qs.filter(date__lte=date_to)
+    if branch_id:
+        qs = qs.filter(branch_id=branch_id)
+    if shift_filter:
+        qs = qs.filter(shift__in=shift_filter)
+    entries = list(qs.order_by('-date', 'branch__name', 'shift'))
+
+    zero = Decimal('0')
+
+    def dec(v):
+        return Decimal(str(v or 0))
+
+    # (key, label, side) — the table columns, Daily Sales first, then Cash
+    sales_cols = [('discount', 'Discount'), ('visa', 'Visa')]
+    sales_cols += [(f'del_{k}', label) for k, label in DELIVERY_SOURCES]
+    sales_cols += [('del_cancel', 'Delivery Cancelled'), ('del_net', 'Delivery (net)'),
+                   ('orders', 'Delivery Orders'), ('sales_actual', 'Sales Actual'),
+                   ('foodics', 'Foodics'), ('variance', 'Variance')]
+    cash_cols = [('waiter_cash', 'Cash (waiter)'), ('cash_cancel', 'Cash Cancelled'), ('petty', 'Petty Cash'),
+                 ('col_cash', 'Cash (collected)'), ('col_aed', 'AED Cash'), ('cash_diff', 'Cash Difference')]
+    columns = [{'key': k, 'label': l, 'side': 'sales'} for k, l in sales_cols] + \
+              [{'key': k, 'label': l, 'side': 'cash'} for k, l in cash_cols]
+
+    totals = {c['key']: zero for c in columns}
+    n_sales = n_cash = 0
+    rows = []
+    for e in entries:
+        h = getattr(e, 'collector', None)
+        sales_ok = e.is_audited
+        cash_ok = h is not None and h.reconciled
+        n_sales += 1 if sales_ok else 0
+        n_cash += 1 if cash_ok else 0
+
+        dl = e.delivery_data or {}
+        vals = {
+            'discount': e.staff_discount, 'visa': e.visa_total,
+            'del_cancel': e.delivery_cancel_amount, 'del_net': e.delivery_total,
+            'orders': sum(int((dl.get(k, {}) or {}).get('orders') or 0) for k, _ in DELIVERY_SOURCES),
+            'sales_actual': e.sales_actual,
+            'foodics': e.expected_foodics if sales_ok else None,
+            'variance': e.variance if sales_ok else None,
+            'waiter_cash': e.cash_total, 'cash_cancel': e.cash_cancel_amount, 'petty': e.petty_cash,
+            'col_cash': h.cash_total if h is not None else None,
+            'col_aed': (_aed_cash_total_from_counts(h.cash_counts_aed or {}) * dec(e.aed_exchange_rate)) if h is not None else None,
+            'cash_diff': h.diff_from_waiter if h is not None else None,
+        }
+        for k, _ in DELIVERY_SOURCES:
+            row = dl.get(k, {}) or {}
+            vals[f'del_{k}'] = dec(row.get('amount')) - dec(row.get('cancel_amount'))
+
+        cells = []
+        for c in columns:
+            counted = sales_ok if c['side'] == 'sales' else cash_ok
+            v = vals[c['key']]
+            if v is not None and counted:
+                totals[c['key']] += dec(v)
+            cells.append({'value': v, 'counted': counted, 'int': c['key'] == 'orders'})
+        rows.append({
+            'entry': e, 'sales_ok': sales_ok, 'cash_ok': cash_ok,
+            'cash_state': 'reconciled' if cash_ok else ('collected' if h is not None else 'not collected'),
+            'cells': cells,
+        })
+
+    cards = [
+        {'title': 'Sales Actual', 'amount': totals['sales_actual'], 'shifts': n_sales,
+         'hint': 'cash + visa − discount', 'pending': len(entries) - n_sales,
+         'pending_text': 'waiting for sales review'},
+        {'title': 'Cash', 'amount': totals['col_cash'], 'shifts': n_cash,
+         'hint': 'as counted by the collector', 'pending': len(entries) - n_cash,
+         'pending_text': 'waiting for cash reconciliation'},
+    ]
+
+    return render(request, 'salesapp/daily_sales_report.html', {
+        'active_tab': 'daily_report',
+        'cards': cards,
+        'columns': columns,
+        'sales_col_count': len(sales_cols),
+        'cash_col_count': len(cash_cols),
+        'rows': rows,
+        'total_cells': [{'value': totals[c['key']], 'int': c['key'] == 'orders'} for c in columns],
+        'entry_count': len(entries),
+        'branches': Branch.objects.filter(is_active=True).order_by('name'),
+        'shift_choices': SHIFT_CHOICES,
+        'date_from': date_from,
+        'date_to': date_to,
+        'branch_id': branch_id,
+        'shift_filter': shift_filter,
+    })
+
+
 @role_required('audit', 'admin')
 def edit_entry_view(request, entry_id):
     entry = get_object_or_404(ShiftEntry, id=entry_id)
@@ -842,44 +1385,14 @@ def edit_entry_view(request, entry_id):
         entry.date = request.POST.get('date')
         entry.shift = request.POST.get('shift')
         entry.accountant = request.POST.get('accountant', '').strip()
-        entry.staff_discount = _dec(request.POST.get('staff_discount'))
-        entry.petty_cash = _dec(request.POST.get('petty_cash'))
-
-        entry.cash_counts = {d: int(request.POST.get(f'denom_{d}', 0) or 0) for d in DENOMS}
-        entry.cash_counts_aed = {d: int(request.POST.get(f'denom_aed_{d}', 0) or 0) for d in AED_DENOMS}
-        entry.aed_exchange_rate = _dec(request.POST.get('aed_exchange_rate'), default='0.1000')
-
-        visa_rows = _parse_visa_rows(request)
-        entry.visa_entries = [{'serial': r['serial'], 'amount': float(r['amount'])} for r in visa_rows]
-        delivery_cancel_rows = _parse_delivery_cancellations(request)
-
-        delivery_data = {}
-        for key, _label in DELIVERY_SOURCES:
-            delivery_data[key] = {
-                'orders': int(request.POST.get(f'orders_{key}', 0) or 0),
-                'amount': float(_dec(request.POST.get(f'amount_{key}', 0))),
-                'cancel_orders': int(request.POST.get(f'cancel_orders_{key}', 0) or 0),
-                'cancel_amount': float(_dec(request.POST.get(f'cancel_amount_{key}', 0))),
-            }
-        entry.delivery_data = delivery_data
-        entry.cash_cancel_amount = _dec(request.POST.get('cash_cancel_amount'))
-        entry.delivery_cancel_amount = _delivery_cancel_total(delivery_cancel_rows)
+        visa_rows = _apply_waiter_financials(request, entry)
         entry.expected_foodics = _dec(request.POST.get('expected_foodics'))
         entry.notes = request.POST.get('notes', '')
-        if request.FILES.get('discount_attachment'):
-            entry.staff_discount_attachment = request.FILES['discount_attachment']
         if request.FILES.get('notes_attachment'):
             entry.notes_attachment = request.FILES['notes_attachment']
-        if request.FILES.get('cash_cancel_attachment'):
-            entry.cash_cancel_attachment = request.FILES['cash_cancel_attachment']
-        for key, _label in DELIVERY_SOURCES:
-            uploaded = request.FILES.get(f'delivery_attachment_{key}')
-            if uploaded:
-                setattr(entry, f'delivery_attachment_{key}', uploaded)
 
         entry.save()  # reference_id is untouched since it's already set
         _save_visa_files(entry, visa_rows)
-        _save_delivery_cancellations(entry, delivery_cancel_rows)
 
         handover = getattr(entry, 'collector', None)
         if handover is not None:
@@ -887,7 +1400,7 @@ def edit_entry_view(request, entry_id):
 
         messages.success(request, f'Entry {entry.reference_id} updated.')
         log_activity(request, 'entry_edited', description=entry.reference_id)
-        return redirect('dashboard')
+        return redirect(_safe_next(request) or 'dashboard')
 
     context = {
         'entry': entry,
@@ -895,17 +1408,10 @@ def edit_entry_view(request, entry_id):
         'aed_denoms': AED_DENOMS,
         'denom_pairs': list(zip(DENOMS, AED_DENOMS)),
         'delivery_sources': DELIVERY_SOURCES,
-        'delivery_cancel_rows': [
-            {
-                'id': c.id,
-                'source': c.source,
-                'amount': str(c.amount),
-                'attachment_url': c.attachment.url if c.attachment else '',
-            }
-            for c in entry.delivery_cancellations.all()
-        ],
         'shift_choices': SHIFT_CHOICES,
         'active_tab': 'dashboard',
+        'next_url': _safe_next(request),
+        'selected_entry': entry,
     }
     return render(request, 'salesapp/edit_entry.html', context)
 
@@ -951,6 +1457,9 @@ def toggle_user_active_view(request, user_id):
         return redirect('create_user')
     target.is_active = not target.is_active
     target.save()
+    if target.is_active and getattr(target, 'profile', None) and target.profile.pending_approval:
+        target.profile.pending_approval = False
+        target.profile.save(update_fields=['pending_approval'])
     state = 'activated' if target.is_active else 'deactivated'
     log_activity(request, f'user_{state}', description=target.username)
     messages.success(request, f'{target.username} {state}.')
@@ -1219,62 +1728,20 @@ def _mark_reconciled(request, handover, note=''):
     handover.reconciled_by = request.user
     handover.reconcile_note = note
     handover.save(update_fields=['reconciled', 'reconciled_at', 'reconciled_by', 'reconcile_note'])
-    log_activity(request, 'cash_reconciled', description=handover.shift_entry.reference_id)
+    details = (f'Waiter cash: {Decimal(str(handover.shift_entry.cash_total)):.3f} RO | '
+               f'Collector cash: {Decimal(str(handover.cash_total)):.3f} RO | '
+               f'Difference: {Decimal(str(handover.diff_from_waiter)):.3f} RO')
+    if note:
+        details += f'\nNote: "{note}"'
+    log_activity(request, 'cash_reconciled', description=handover.shift_entry.reference_id, details=details)
 
 
 @role_required('audit', 'admin')
 def cash_reconciliation_view(request):
-    """Stage 2 of the audit: the collector's physical cash count against the
-    cash the waiter reported. Differences are flagged for attention; shifts
-    that match exactly can be approved together."""
-    status = request.GET.get('status', 'pending')
-    if status not in ('pending', 'reconciled'):
-        status = 'pending'
-    branch_filter = request.GET.get('branch_filter', '').strip()
-    date_from = request.GET.get('date_from', '').strip()
-    date_to = request.GET.get('date_to', '').strip()
-    search_ref = request.GET.get('search_ref', '').strip()
-
-    handovers = CollectorHandover.objects.select_related(
-        'shift_entry', 'shift_entry__branch', 'reconciled_by'
-    ).filter(shift_entry__is_archived=False)
-    if branch_filter:
-        handovers = handovers.filter(shift_entry__branch__name__icontains=branch_filter)
-    if date_from:
-        handovers = handovers.filter(shift_entry__date__gte=date_from)
-    if date_to:
-        handovers = handovers.filter(shift_entry__date__lte=date_to)
-    if search_ref:
-        handovers = handovers.filter(shift_entry__reference_id__icontains=search_ref)
-
-    with_diff, matched, reconciled_rows = [], [], []
-    if status == 'reconciled':
-        reconciled_rows = list(handovers.filter(reconciled=True).order_by('-reconciled_at')[:200])
-    else:
-        pending = handovers.filter(reconciled=False).order_by(
-            'shift_entry__branch__name', 'shift_entry__date', 'shift_entry__shift')
-        for h in pending:
-            (with_diff if h.has_difference(CASH_TOLERANCE) else matched).append(h)
-
-    # Shifts the collector hasn't picked up yet — overdue ones are highlighted.
-    waiting = ShiftEntry.objects.filter(is_archived=False, collector__isnull=True)
-    overdue_cutoff = timezone.localdate() - timedelta(days=COLLECTION_OVERDUE_DAYS)
-
-    context = {
-        'status': status,
-        'with_diff': with_diff,
-        'matched': matched,
-        'reconciled_rows': reconciled_rows,
-        'waiting_count': waiting.count(),
-        'overdue_count': waiting.filter(date__lte=overdue_cutoff).count(),
-        'overdue_days': COLLECTION_OVERDUE_DAYS,
-        'branch_filter': branch_filter,
-        'date_from': date_from,
-        'date_to': date_to,
-        'search_ref': search_ref,
-        'active_tab': 'cash_reconciliation',
-    }
-    return render(request, 'salesapp/cash_reconciliation.html', context)
+    """Retired as a separate page — Cash Reconciliation is now part of the
+    single Audit workspace. Kept only so an old bookmark still lands somewhere."""
+    entry_id = request.GET.get('entry_id', '')
+    return redirect(f'/dashboard/?entry_id={entry_id}' if entry_id else '/dashboard/')
 
 
 @role_required('audit', 'admin')

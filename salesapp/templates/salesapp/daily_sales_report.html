@@ -1,0 +1,125 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+<style>
+  .rep-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:14px; margin-bottom:22px; }
+  .rep-card { background:#fff; border:1px solid #E7E4DB; border-radius:12px; padding:14px 16px; }
+  .rep-title { font-size:12px; font-weight:700; color:#6F6A5C; letter-spacing:.4px; text-transform:uppercase; }
+  .rep-amount { font-size:32px; font-weight:800; color:#1F3B4D; line-height:1.15; margin:8px 0 2px; }
+  .rep-amount small { font-size:12px; font-weight:600; color:#8A8578; }
+  .rep-amount.neg { color:#B94A3F; }
+  .rep-amount.pos { color:#1F8A5C; }
+  .rep-hint { font-size:11.5px; color:#9A9585; }
+  .rep-sub { font-size:12px; color:#6F6A5C; margin-top:6px; font-weight:600; }
+  .sec-head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:6px 2px 12px; }
+  .sec-head h2 { margin:0; font-size:18px; color:#1F3B4D; }
+  .pending-note { font-size:12px; color:#8A5410; background:#FDF1E3; border-radius:8px; padding:6px 12px; }
+  .full-wrap { overflow:auto; max-height:640px; border:1px solid #E7E4DB; border-radius:10px; }
+  .full-table { border-collapse:separate; border-spacing:0; width:max-content; min-width:100%; font-size:13px; }
+  .full-table th, .full-table td { padding:8px 12px; border-bottom:1px solid #F0EEE7; white-space:nowrap; text-align:right; background:#fff; }
+  .full-table th { position:sticky; top:0; background:#F7F5EE; z-index:2; font-size:12px; color:#6F6A5C; }
+  .full-table th.grp { top:0; text-align:center; font-weight:800; color:#1F3B4D; border-bottom:2px solid #E3DFD3; }
+  .full-table .l { text-align:left; }
+  .full-table td.muted { color:#B5B0A0; }
+  .full-table tr.pending-row td { background:#FCFBF8; }
+  .full-table tfoot td { position:sticky; bottom:0; background:#1F3B4D; color:#fff; font-weight:800; z-index:2; }
+  .st { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; }
+  .st.ok { background:#E9F4EE; color:#1F8A5C; }
+  .st.wait { background:#FDF1E3; color:#8A5410; }
+  .st.mid { background:#E6F1FB; color:#185FA5; }
+</style>
+
+<div class="card">
+  <h3>Daily Sales Report</h3>
+  <form method="get" style="margin:0;">
+    <div class="grid grid-4">
+      <div><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+      <div><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+      <div><label>Branch</label>
+        <select name="branch">
+          <option value="">All branches</option>
+          {% for b in branches %}
+            <option value="{{ b.id }}" {% if branch_id == b.id|stringformat:"s" %}selected{% endif %}>{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div><label>Shift</label>
+        <div style="display:flex; gap:12px; padding-top:8px;">
+          {% for value, label in shift_choices %}
+            <label style="display:flex; align-items:center; gap:4px; font-weight:400; margin:0;">
+              <input type="checkbox" name="shift" value="{{ value }}" style="width:auto;" {% if value in shift_filter %}checked{% endif %}> {{ label }}
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <button type="submit" class="btn">Apply</button>
+      <a href="{% url 'daily_sales_report' %}" class="btn secondary" style="text-decoration:none; display:inline-block; margin-left:8px;">This month</a>
+    </div>
+  </form>
+  <div style="margin-top:10px; font-size:12px; color:#8A8578;">The cards and the total row count completed shifts only. A shift still waiting appears greyed in the table and joins the totals automatically once it completes.</div>
+</div>
+
+<div class="rep-grid">
+  {% for c in cards %}
+  <div class="rep-card">
+    <div class="rep-title">{{ c.title }}</div>
+    <div class="rep-amount">{{ c.amount|floatformat:3 }} <small>RO</small></div>
+    <div class="rep-hint">{{ c.hint }} · {{ c.shifts }} shift{{ c.shifts|pluralize }}</div>
+    {% if c.pending %}<div class="pending-note" style="margin-top:10px; display:inline-block;">{{ c.pending }} shift{{ c.pending|pluralize }} {{ c.pending_text }} — not counted yet</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="sec-head">
+  <h2>Full table</h2>
+  <span style="font-size:13px; color:#8A8578;">{{ entry_count }} shift{{ entry_count|pluralize }}</span>
+</div>
+{% if rows %}
+<div class="full-wrap">
+<table class="full-table">
+  <thead>
+    <tr>
+      <th class="grp l" colspan="7"></th>
+      <th class="grp" colspan="{{ sales_col_count }}">Daily Sales</th>
+      <th class="grp" colspan="{{ cash_col_count }}">Cash</th>
+    </tr>
+    <tr>
+      <th class="l">Date</th><th class="l">Branch</th><th class="l">Submitted By</th><th class="l">Shift</th><th class="l">Ref</th>
+      <th class="l">Sales</th><th class="l">Cash</th>
+      {% for c in columns %}<th>{{ c.label }}</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="{% if not r.sales_ok or not r.cash_ok %}pending-row{% endif %}">
+      <td class="l">{{ r.entry.date|date:"d M Y" }}</td>
+      <td class="l">{{ r.entry.branch.name }}</td>
+      <td class="l">{{ r.entry.accountant|default:"-" }}</td>
+      <td class="l">{{ r.entry.shift }}</td>
+      <td class="l">{{ r.entry.reference_id }}</td>
+      <td class="l">{% if r.sales_ok %}<span class="st ok">Reviewed</span>{% else %}<span class="st wait">Pending</span>{% endif %}</td>
+      <td class="l">
+        {% if r.cash_state == 'reconciled' %}<span class="st ok">Reconciled</span>
+        {% elif r.cash_state == 'collected' %}<span class="st mid">Collected</span>
+        {% else %}<span class="st wait">Not collected</span>{% endif %}
+      </td>
+      {% for cell in r.cells %}
+        <td class="{% if not cell.counted %}muted{% endif %}">{% if cell.value is None %}-{% elif cell.int %}{{ cell.value }}{% else %}{{ cell.value|floatformat:3 }}{% endif %}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr>
+      <td class="l" colspan="7">Total — completed shifts only</td>
+      {% for t in total_cells %}<td>{% if t.int %}{{ t.value|floatformat:0 }}{% else %}{{ t.value|floatformat:3 }}{% endif %}</td>{% endfor %}
+    </tr>
+  </tfoot>
+</table>
+</div>
+{% else %}
+<div class="card" style="color:#8A8578;">No shifts match these filters.</div>
+{% endif %}
+
+{% endblock %}

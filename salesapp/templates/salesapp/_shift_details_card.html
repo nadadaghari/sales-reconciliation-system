@@ -1,0 +1,13 @@
+<div class="card">
+  <h3>Shift Details</h3>
+  <div class="grid grid-4">
+    <div><label>Submit Request No.</label><input value="{{ selected_entry.reference_id }}" disabled></div>
+    <div><label>Branch</label><input value="{{ selected_entry.branch.name }}" disabled></div>
+    <div><label>Date</label><input value="{{ selected_entry.date }}" disabled></div>
+    <div><label>Shift</label><input value="Shift {{ selected_entry.shift }}" disabled></div>
+  </div>
+  <div class="grid grid-2" style="margin-top:12px;">
+    <div><label>Submitted by</label><input value="{{ selected_entry.accountant|default:'-' }}" disabled></div>
+    <div><label>Submitted At</label><input value="{{ selected_entry.created_at }}" disabled></div>
+  </div>
+</div>

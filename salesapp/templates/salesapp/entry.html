@@ -54,14 +54,6 @@
   </div>
 
   <div class="card">
-    <h3>Discount</h3>
-    <div class="grid grid-2">
-      <div><label>Discount Amount</label><input name="discount_amount" type="number" step="0.001" value="0" class="calc-input" id="discountAmount"></div>
-      <div><label>Receipt (photo/PDF)</label><input type="file" name="discount_attachment" accept="image/*,.pdf"></div>
-    </div>
-  </div>
-
-  <div class="card">
     <h3>Cash Report</h3>
     <div style="margin-bottom:14px;">
       <label style="display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:0;">
@@ -112,6 +104,14 @@
   </div>
 
   <div class="card">
+    <h3>Discount</h3>
+    <div class="grid grid-2">
+      <div><label>Discount Amount</label><input name="discount_amount" type="number" step="0.001" value="0" class="calc-input" id="discountAmount"></div>
+      <div><label>Receipt (photo/PDF)</label><input type="file" name="discount_attachment" accept="image/*,.pdf"></div>
+    </div>
+  </div>
+
+  <div class="card">
     <h3>Visa Report</h3>
     <div id="visaRows"></div>
     <button type="button" class="btn secondary small" onclick="addVisaRow()">+ Add Machine</button>
@@ -129,9 +129,9 @@
         <tr>
           <td>{{ label }}</td>
           <td><input type="number" value="0" style="width:80px;" name="orders_{{ key }}"></td>
-          <td><input type="number" value="0" style="width:90px;" name="amount_{{ key }}" class="calc-input" data-del="{{ key }}"></td>
+          <td><input type="number" value="0" style="width:90px;" name="amount_{{ key }}" class="calc-input" data-del-amount="{{ key }}"></td>
           <td><input type="number" value="0" style="width:80px;" name="cancel_orders_{{ key }}"></td>
-          <td><input type="number" value="0" style="width:90px;" name="cancel_amount_{{ key }}"></td>
+          <td><input type="number" value="0" style="width:90px;" name="cancel_amount_{{ key }}" class="calc-input" data-del-cancelamount="{{ key }}"></td>
           <td><input type="file" name="delivery_attachment_{{ key }}" accept="image/*,.pdf" style="width:150px; padding:4px;"></td>
         </tr>
         {% endfor %}
@@ -140,11 +140,7 @@
     </div>
     <div class="total-strip"><span>Total Delivery</span><span id="deliveryTotalDisplay">0.000</span></div>
     <div class="total-strip" style="margin-top:6px;"><span>Delivery Actual Amount (after cancellation)</span><span id="deliveryActualDisplay">0.000 RO</span></div>
-
-    <h3 style="margin-top:20px; font-size:14px;">Delivery Cancelled Order (if any) — auto-deducted</h3>
-    <div id="deliveryCancelRows"></div>
-    <button type="button" class="btn secondary small" onclick="addDeliveryCancelRow()">+ Add Cancelled Order</button>
-    <div class="total-strip" style="margin-top:10px;"><span>Total Delivery Cancelled</span><span id="deliveryCancelTotalDisplay">0.000 RO</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Total Delivery Cancelled</span><span id="deliveryCancelTotalDisplay">0.000 RO</span></div>
   </div>
 
   <div class="card">
@@ -161,7 +157,6 @@
   <button type="submit" class="btn">Submit</button>
 </form>
 
-{{ delivery_sources|json_script:"deliverySourcesData" }}
 <script>
 const DENOMS = {{ denoms|safe }};
 const AED_DENOMS = {{ aed_denoms|safe }};
@@ -191,30 +186,6 @@ function addVisaRow(){
     <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_attachment_${visaCount}" accept="image/*,.pdf"></div>
     <button type="button" class="btn secondary small" onclick="document.getElementById('${id}').remove(); calcAll();">Remove</button>`;
   c.appendChild(row);
-  row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
-  if(window.enhanceFileInputs) window.enhanceFileInputs();
-}
-
-let deliveryCancelCount = 0;
-const DELIVERY_SOURCES = JSON.parse(document.getElementById('deliverySourcesData').textContent);
-
-// Cancelled delivery orders: as many rows as needed — different companies, or
-// the same company more than once. Each row keeps its own receipt.
-function addDeliveryCancelRow(){
-  deliveryCancelCount++;
-  const n = deliveryCancelCount;
-  const options = DELIVERY_SOURCES.map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
-  const row = document.createElement('div');
-  row.className = 'visa-row';
-  row.id = 'dcancel_' + n;
-  row.style.gridTemplateColumns = '2fr 1fr 2fr auto';
-  row.innerHTML = `
-    <input type="hidden" name="delivery_cancel_row[]" value="${n}">
-    <div><label>Delivery Company</label><select name="delivery_cancel_source[]" required><option value="">— Select —</option>${options}</select></div>
-    <div><label>Cancelled Amount</label><input type="number" step="0.001" min="0.001" name="delivery_cancel_amount[]" class="calc-input" required></div>
-    <div><label>Receipt (photo/PDF)</label><input type="file" name="delivery_cancel_attachment_${n}" accept="image/*,.pdf"></div>
-    <button type="button" class="btn secondary small" onclick="document.getElementById('dcancel_${n}').remove(); calcAll();">Remove</button>`;
-  document.getElementById('deliveryCancelRows').appendChild(row);
   row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
   if(window.enhanceFileInputs) window.enhanceFileInputs();
 }
@@ -253,9 +224,9 @@ function calcAll(){
   document.getElementById('visaTotalDisplay').textContent = visaTotal.toFixed(3) + ' RO';
 
   let deliveryTotal = 0;
-  document.querySelectorAll('[data-del]').forEach(inp => deliveryTotal += (parseFloat(inp.value)||0));
+  document.querySelectorAll('[data-del-amount]').forEach(inp => deliveryTotal += (parseFloat(inp.value)||0));
   let deliveryCancel = 0;
-  document.querySelectorAll('[name="delivery_cancel_amount[]"]').forEach(inp => deliveryCancel += (parseFloat(inp.value)||0));
+  document.querySelectorAll('[data-del-cancelamount]').forEach(inp => deliveryCancel += (parseFloat(inp.value)||0));
   document.getElementById('deliveryCancelTotalDisplay').textContent = deliveryCancel.toFixed(3) + ' RO';
   const netDelivery = deliveryTotal - deliveryCancel;
   document.getElementById('deliveryTotalDisplay').textContent = deliveryTotal.toFixed(3) + ' RO';

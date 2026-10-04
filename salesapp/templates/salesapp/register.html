@@ -1,0 +1,70 @@
+{% extends "salesapp/base.html" %}
+{% load static %}
+{% block content %}
+<div style="min-height:80vh; display:flex; align-items:center; justify-content:center; width:100vw; position:relative; left:50%; transform:translateX(-50%);">
+  <div style="max-width:440px; width:100%; background:#fff; border-radius:24px; padding:36px 34px; box-shadow:0 10px 40px rgba(0,0,0,0.08); text-align:center;">
+    <img src="{% static 'salesapp/logo.png' %}" alt="Logo" style="width:80px; height:auto; margin-bottom:14px;">
+    <h2 style="margin:0 0 6px; font-size:24px; font-weight:800; color:#1C1917;">Waiter Registration</h2>
+    <p style="margin:0 0 22px; color:#8A8578; font-size:14px;">Register yourself once, then log in with your branch code and Punch ID.</p>
+
+    {% if error %}
+    <div style="background:#FBE9E6; color:#B94A3F; border-radius:12px; padding:10px 14px; font-size:13px; font-weight:600; margin-bottom:16px; text-align:left;">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" style="text-align:left;" autocomplete="off">
+      {% csrf_token %}
+      <div style="margin-bottom:14px;">
+        <label style="font-weight:700; font-size:13px; color:#1C1917; margin-bottom:6px; display:block;">Your name</label>
+        <input name="name" required value="{{ form.name }}" placeholder="Full name" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:11px 18px;">
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-weight:700; font-size:13px; color:#1C1917; margin-bottom:6px; display:block;">Punch ID</label>
+        <input name="punch_id" required value="{{ form.punch_id }}" placeholder="Your Punch ID" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:11px 18px;">
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-weight:700; font-size:13px; color:#1C1917; margin-bottom:6px; display:block;">Branch</label>
+        <select name="branch" id="branchSelect" required onchange="fillBranchCode()" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:11px 18px;">
+          <option value="" data-code="">-- select your branch --</option>
+          {% for b in branches %}
+            <option value="{{ b.id }}" data-code="{{ b.code }}" {% if form.branch == b.id|stringformat:"s" %}selected{% endif %}>{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-weight:700; font-size:13px; color:#1C1917; margin-bottom:6px; display:block;">Branch code <span style="font-weight:400; color:#9A9585;">(filled in automatically)</span></label>
+        <input name="branch_code" id="branchCode" readonly tabindex="-1" value="{{ form.branch_code }}" placeholder="Select your branch first" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:11px 18px; background:#F7F5EE; color:#1F3B4D; font-weight:700; cursor:default;">
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-weight:700; font-size:13px; color:#1C1917; margin-bottom:6px; display:block;">Password</label>
+        <div style="display:flex; align-items:center; max-width:280px;">
+          <input name="password" type="password" required minlength="8" placeholder="At least 8 characters" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:11px 42px 11px 18px; flex:1; min-width:0;">
+          <button type="button" onclick="togglePwField(this)" aria-label="Show / hide password" style="flex:none; width:30px; height:22px; margin-left:-38px; display:flex; align-items:center; justify-content:center; background:none; border:none; cursor:pointer; padding:0;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C5A52" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
+      </div>
+      <div style="margin-bottom:20px;">
+        <label style="font-weight:700; font-size:13px; color:#1C1917; margin-bottom:6px; display:block;">Confirm password</label>
+        <div style="display:flex; align-items:center; max-width:280px;">
+          <input name="password2" type="password" required minlength="8" placeholder="Type it again" style="border-radius:24px; border:1.5px solid #E7E4DB; padding:11px 42px 11px 18px; flex:1; min-width:0;">
+          <button type="button" onclick="togglePwField(this)" aria-label="Show / hide password" style="flex:none; width:30px; height:22px; margin-left:-38px; display:flex; align-items:center; justify-content:center; background:none; border:none; cursor:pointer; padding:0;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C5A52" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
+      </div>
+      <button type="submit" style="width:100%; background:#D4A843; color:#1C1917; border:none; border-radius:24px; padding:14px; font-weight:700; font-size:15px; cursor:pointer;">Register</button>
+    </form>
+    <div style="margin-top:16px;"><a href="{% url 'login' %}" style="font-size:13px; color:#8A8578;">Already registered? Log in</a></div>
+  </div>
+</div>
+
+<script>function togglePwField(btn){
+  const input = btn.parentElement.querySelector('input');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+// Picking the branch fills in the code saved for it, so it can never be mistyped.
+function fillBranchCode(){
+  const sel = document.getElementById('branchSelect');
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('branchCode').value = (opt && opt.dataset.code) || '';
+}
+fillBranchCode();
+</script>
+{% endblock %}

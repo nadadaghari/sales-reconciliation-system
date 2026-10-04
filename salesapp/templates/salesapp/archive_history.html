@@ -26,7 +26,7 @@
     <table style="margin:0;">
       <thead>
         <tr>
-          <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Accountant</th><th>Actual</th><th>Variance</th><th></th>
+          <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Submitted By</th>{% if user.profile.role == 'collector' %}<th>Cash</th>{% else %}<th>Actual</th><th>Variance</th>{% endif %}<th></th>
         </tr>
       </thead>
       <tbody>
@@ -36,8 +36,8 @@
           <td>{{ e.date }}</td>
           <td>Shift {{ e.shift }}</td>
           <td>{{ e.accountant|default:"-" }}</td>
-          <td>{{ e.actual_total|floatformat:3 }} RO</td>
-          <td style="{% if e.variance != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{{ e.variance|floatformat:3 }} RO</td>
+          {% if user.profile.role == 'collector' %}<td>{{ e.cash_total|floatformat:3 }} RO</td>{% else %}<td>{{ e.actual_total|floatformat:3 }} RO</td>
+          <td style="{% if e.expected_foodics and e.variance != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{% if e.expected_foodics %}{{ e.variance|floatformat:3 }} RO{% else %}-{% endif %}</td>{% endif %}
           <td>
             <form method="post" action="{% url 'archive_entry' e.id %}" style="display:inline;">
               {% csrf_token %}

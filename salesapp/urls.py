@@ -6,6 +6,7 @@ urlpatterns = [
     path('my-history/', views.waiter_history_view, name='waiter_history'),
     path('collector/', views.collector_view, name='collector'),
     path('dashboard/', views.dashboard_view, name='dashboard'),
+    path('reports/daily-sales/', views.daily_sales_report_view, name='daily_sales_report'),
     path('cash-reconciliation/', views.cash_reconciliation_view, name='cash_reconciliation'),
     path('cash-reconciliation/action/', views.cash_reconcile_action_view, name='cash_reconcile_action'),
     path('dashboard/<int:entry_id>/edit/', views.edit_entry_view, name='edit_entry'),
@@ -16,6 +17,7 @@ urlpatterns = [
     path('login/', views.branch_login_view, name='login'),
     # Collector / Audit / Admin / IT use username + password.
     path('staff-login/', views.login_view, name='staff_login'),
+    path('register/', views.register_view, name='register'),
     path('logout/', views.logout_view, name='logout'),
     path('users/', views.create_user_view, name='create_user'),
     path('users/<int:user_id>/unlock/', views.unlock_user_view, name='unlock_user'),

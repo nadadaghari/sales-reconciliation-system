@@ -1,0 +1,17 @@
+{# Cash stage: the collector's note and Audit's Cash Reconciliation note. #}
+{% if selected_handover.notes or selected_handover.reconcile_note %}
+<div class="card" style="background:#FAEEDA;">
+  <h3 style="color:#854F0B;">Cash Notes</h3>
+  <div class="grid grid-2">
+    <div>
+      <label style="color:#854F0B; font-weight:700;">Collector</label>
+      <div style="color:#1F3B4D; font-size:14px;">{{ selected_handover.notes|default:"—" }}</div>
+    </div>
+    <div>
+      <label style="color:#854F0B; font-weight:700;">Audit</label>
+      <div style="color:#1F3B4D; font-size:14px;">{{ selected_handover.reconcile_note|default:"—" }}</div>
+      {% if selected_handover.reconciled_by %}<div style="margin-top:4px; color:#8A8578; font-size:12px;">{{ selected_handover.reconciled_by.username }} · {{ selected_handover.reconciled_at|date:"Y-m-d H:i" }}</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}

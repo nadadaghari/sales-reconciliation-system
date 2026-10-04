@@ -1,0 +1,51 @@
+{% load app_filters %}
+<div class="card">
+  <h3>Cash Report</h3>
+  <div class="grid grid-2" style="margin-bottom:14px;">
+    <div><label>Petty Cash Amount{% if shift_changes.petty_cash %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</label><input value="{{ selected_entry.petty_cash }}" disabled></div>
+    {% if entry_aed_denoms %}<div><label>AED → OMR rate</label><input value="{{ selected_entry.aed_exchange_rate }}" disabled></div>{% endif %}
+  </div>
+
+  <div class="grid {% if entry_aed_denoms %}grid-2{% endif %}">
+    <div>
+      <h3 style="font-size:14px;">OMR</h3>
+      {% for row in entry_denoms %}
+      <div class="denom-row">
+        <div class="denom-label">{{ row.denom }}</div>
+        <div style="width:70px;">x {{ row.count }}</div>
+        <div style="color:#8A8578; font-size:13px;">{{ row.amount|floatformat:3 }} RO</div>
+        <div style="width:58px; flex:none;">{% with k="denom_"|add:row.denom %}{% if shift_changes|get_item:k %}<span style="display:inline-block; font-size:9px; color:#fff; background:#1F8A5C; font-weight:700; padding:1px 5px; border-radius:4px;">Audited</span>{% endif %}{% endwith %}</div>
+      </div>
+      {% endfor %}
+      <div class="total-strip"><span>Total OMR</span><span>{{ cash_omr_total|floatformat:3 }} RO</span></div>
+    </div>
+    {% if entry_aed_denoms %}
+    <div>
+      <h3 style="font-size:14px;">AED</h3>
+      {% for row in entry_aed_denoms %}
+      <div class="denom-row">
+        <div class="denom-label">{{ row.denom }}</div>
+        <div style="width:70px;">x {{ row.count }}</div>
+        <div style="color:#8A8578; font-size:13px;">{{ row.amount|floatformat:3 }} AED = {{ row.omr_equivalent|floatformat:3 }} RO</div>
+        <div style="width:58px; flex:none;">{% with k="denom_aed_"|add:row.denom %}{% if shift_changes|get_item:k %}<span style="display:inline-block; font-size:9px; color:#fff; background:#1F8A5C; font-weight:700; padding:1px 5px; border-radius:4px;">Audited</span>{% endif %}{% endwith %}</div>
+      </div>
+      {% endfor %}
+      <div class="total-strip"><span>Total AED → OMR</span><span>{{ cash_aed_in_omr|floatformat:3 }} RO</span></div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span>{{ selected_entry.cash_total|add:selected_entry.cash_cancel_amount|floatformat:3 }} RO</span></div>
+  {% if selected_entry.cash_cancel_amount %}
+  <div style="overflow-x:auto; margin-top:10px;">
+  <table>
+    <thead><tr><th>Cash Cancelled Order{% if shift_changes.cash_cancel_amount %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</th><th>Receipt</th></tr></thead>
+    <tbody><tr>
+      <td>{{ selected_entry.cash_cancel_amount }} RO</td>
+      <td>{% if selected_entry.cash_cancel_attachment %}<a href="{{ selected_entry.cash_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
+    </tr></tbody>
+  </table>
+  </div>
+  {% endif %}
+  <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+</div>
