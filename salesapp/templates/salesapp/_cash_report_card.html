@@ -1,6 +1,7 @@
 {% load app_filters %}
 <div class="card">
   <h3>Cash Report</h3>
+  {% if waiter_cash_changes %}<div style="font-size:12px; color:#8A8578; margin:-2px 0 12px;">Audit changed {{ waiter_cash_changes }} cash number{{ waiter_cash_changes|pluralize }} in this report — marked <b style="color:#1F8A5C;">Audited</b>.</div>{% endif %}
   <div class="grid grid-2" style="margin-bottom:14px;">
     <div><label>Petty Cash Amount{% if shift_changes.petty_cash %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</label><input value="{{ selected_entry.petty_cash }}" disabled></div>
     {% if entry_aed_denoms %}<div><label>AED → OMR rate</label><input value="{{ selected_entry.aed_exchange_rate }}" disabled></div>{% endif %}

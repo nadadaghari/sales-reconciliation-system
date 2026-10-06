@@ -451,21 +451,28 @@ def _compute_shift_changes(entry):
 
 
 def _compute_handover_changes(handover):
-    """Same idea as _compute_shift_changes, for the collector's own count."""
-    snap = handover.original_snapshot or {}
+    """Which of the collector's fields are marked 'Audited': any count that
+    differs from what the WAITER reported, plus any count edited after his
+    first save."""
     changes = {}
-    if not snap:
-        return changes
+    entry = handover.shift_entry
+    snap = handover.original_snapshot or {}
     for d in DENOMS:
-        old = int(snap.get('cash_counts', {}).get(d, 0) or 0)
         new = int(handover.cash_counts.get(d, 0) or 0)
-        if old != new:
-            changes[f'cdenom_{d}'] = f'Changed from {old} to {new}'
+        waiter = int(entry.cash_counts.get(d, 0) or 0)
+        first = int(snap.get('cash_counts', {}).get(d, new) or 0) if snap else new
+        if new != waiter:
+            changes[f'cdenom_{d}'] = f'Waiter {waiter} → collector {new}'
+        elif new != first:
+            changes[f'cdenom_{d}'] = f'Changed from {first} to {new}'
     for d in AED_DENOMS:
-        old = int(snap.get('cash_counts_aed', {}).get(d, 0) or 0)
         new = int(handover.cash_counts_aed.get(d, 0) or 0)
-        if old != new:
-            changes[f'cdenom_aed_{d}'] = f'Changed from {old} to {new}'
+        waiter = int(entry.cash_counts_aed.get(d, 0) or 0)
+        first = int(snap.get('cash_counts_aed', {}).get(d, new) or 0) if snap else new
+        if new != waiter:
+            changes[f'cdenom_aed_{d}'] = f'Waiter {waiter} → collector {new}'
+        elif new != first:
+            changes[f'cdenom_aed_{d}'] = f'Changed from {first} to {new}'
     return changes
 
 
@@ -673,6 +680,9 @@ def collector_view(request):
         if is_new:
             handover = CollectorHandover(shift_entry=shift_entry)
         before_snap = _handover_snapshot(handover)
+        if is_new:
+            # nothing saved before: what he changes is measured against the waiter's own count
+            before_snap = {'cash_counts': dict(shift_entry.cash_counts), 'cash_counts_aed': dict(shift_entry.cash_counts_aed)}
         if not is_new and not handover.original_snapshot:
             # Older record saved before baselines existed: treat the count as it
             # stood just before this edit as the baseline, so this edit is flagged.
@@ -691,7 +701,9 @@ def collector_view(request):
         total = f'{Decimal(str(handover.cash_total)):.3f}'
         # The Who column already names the person, so the details carry only what changed.
         if is_new:
-            details = f'Recorded: {total} RO' if by_audit else f'Collector count: {total} RO'
+            head = f'Recorded: {total} RO' if by_audit else f'Collector count: {total} RO'
+            details = (head + "\nDifferent from the waiter's count (waiter → collector):\n" + '\n'.join(diff_lines)) if diff_lines \
+                else head + " — matches the waiter's count"
         elif diff_lines:
             details = '\n'.join(diff_lines)
         else:
@@ -832,6 +844,7 @@ def collector_view(request):
         'cash_tolerance': CASH_TOLERANCE,
         'handover_changes': handover_changes,
         'shift_changes': shift_changes,
+        'waiter_cash_changes': sum(1 for k in shift_changes if k.startswith('denom_') or k in ('cash_cancel_amount', 'petty_cash')),
         'cash_history': cash_history,
         'next_url': _safe_next(request),
         'search_ref': search_ref,
@@ -1039,6 +1052,8 @@ def dashboard_view(request):
         'cash_history': cash_history,
         'shift_changes': shift_changes,
         'handover_changes': handover_changes,
+        'cash_change_count': sum(1 for k in shift_changes if k.startswith('denom_') or k in ('cash_cancel_amount', 'petty_cash')) + len(handover_changes),
+        'sales_change_count': sum(1 for k in shift_changes if not (k.startswith('denom_') or k in ('cash_cancel_amount', 'petty_cash'))),
         'active_tab': 'dashboard',
     }
     return render(request, 'salesapp/dashboard.html', context)

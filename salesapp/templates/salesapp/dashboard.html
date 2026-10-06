@@ -225,8 +225,8 @@ function toggleAuditGroup(id){
 
 <div id="stepWaiterSubmitted"></div>
 <div class="tabpills">
-  <a href="#" id="tabBtnSalesA" class="tabpill active {% if selected_entry.is_audited %}done{% else %}pending{% endif %}" onclick="showAuditTab('sales'); return false;">Daily Sales</a>
-  <a href="#" id="tabBtnCashA" class="tabpill {% if selected_handover %}done{% else %}pending{% endif %}" onclick="showAuditTab('cash'); return false;">Cash</a>
+  <a href="#" id="tabBtnSalesA" class="tabpill active {% if selected_entry.is_audited %}done{% else %}pending{% endif %}" onclick="showAuditTab('sales'); return false;">Daily Sales{% if sales_change_count %}<span style="display:inline-block; margin-left:8px; background:#fff; color:#1F8A5C; font-size:10px; font-weight:800; padding:1px 8px; border-radius:20px; vertical-align:middle;">Audited · {{ sales_change_count }}</span>{% endif %}</a>
+  <a href="#" id="tabBtnCashA" class="tabpill {% if selected_handover %}done{% else %}pending{% endif %}" onclick="showAuditTab('cash'); return false;">Cash{% if cash_change_count %}<span style="display:inline-block; margin-left:8px; background:#fff; color:#1F8A5C; font-size:10px; font-weight:800; padding:1px 8px; border-radius:20px; vertical-align:middle;">Audited · {{ cash_change_count }}</span>{% endif %}</a>
 </div>
 
 <form method="post" enctype="multipart/form-data" id="salesReviewForm">
@@ -573,6 +573,7 @@ calcAll();
   <input type="hidden" name="next" value="{{ request.get_full_path }}">
   <div class="card">
     <h3>Collector's Count</h3>
+    <div style="font-size:12px; color:#8A8578; margin:-2px 0 12px;">{% if handover_changes %}{{ handover_changes|length }} field{{ handover_changes|length|pluralize }} marked <b style="color:#1F8A5C;">Audited</b> — different from the waiter's count, or edited after the first save.{% elif selected_handover %}Matches the waiter's count. Any number that differs from it, or is edited later, is marked <b style="color:#1F8A5C;">Audited</b>.{% else %}Not counted yet.{% endif %}</div>
     <div class="grid grid-2">
       <div>
         <h3 style="font-size:14px;">OMR</h3>

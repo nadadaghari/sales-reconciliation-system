@@ -95,7 +95,7 @@
                 <td style="white-space:nowrap;">{{ log.created_at|date:"Y-m-d H:i" }}</td>
                 <td>{{ log.username_snapshot|default:"-" }}</td>
                 <td>{{ log.get_action_display }}</td>
-                <td style="font-size:12px; color:#8A8578; white-space:pre-line;">{{ log.details|strip_actor|default:"-" }}</td>
+                <td style="font-size:12px; color:#8A8578; white-space:pre-line;">{{ log.clean_details|default:log.details|default:"-" }}</td>
               </tr>
               {% endfor %}
             </tbody>
