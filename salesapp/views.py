@@ -1,24 +1,29 @@
+import re
 import csv
+import datetime
 import io
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.core.cache import cache
+from django.template.defaultfilters import date as date_filter
+from django.views.decorators.cache import never_cache
 from django.core.exceptions import PermissionDenied
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 
 from django.views.decorators.http import require_POST
 from .constants import DENOMS, AED_DENOMS, DELIVERY_SOURCES, SHIFT_CHOICES
 from .decorators import role_required
-from .models import Branch, ShiftEntry, CollectorHandover, UserProfile, VisaMachineFile, ActivityLog
+from .models import Branch, ShiftEntry, CollectorHandover, UserProfile, VisaMachineFile, ActivityLog, _fmt12
 
 
 def login_view(request):
@@ -190,13 +195,38 @@ def logout_view(request):
 CASH_TOLERANCE = Decimal('0.001')
 
 
+def _clean_number(value):
+    """Typed amounts may carry commas, spaces, Arabic digits or Arabic separators."""
+    t = str(value).strip()
+    t = t.translate({ord(c): str(i) for i, c in enumerate('٠١٢٣٤٥٦٧٨٩')})
+    t = t.translate({ord(c): str(i) for i, c in enumerate('۰۱۲۳۴۵۶۷۸۹')})
+    t = re.sub(r"[\s\u00A0\u066C']", '', t).replace('\u066B', ',').replace('،', ',')
+    if ',' in t:
+        if re.fullmatch(r'[1-9]\d{0,2}(,\d{3})+(\.\d+)?', t):
+            t = t.replace(',', '')            # 1,234 -> thousands separator
+        elif t.count(',') == 1 and '.' not in t:
+            t = t.replace(',', '.')           # 0,500 / 1,5 -> decimal comma
+        else:
+            t = t.replace(',', '')
+    return t
+
+
 def _dec(value, default='0'):
     try:
         if value in (None, ''):
             return Decimal(default)
-        return Decimal(str(value))
+        return Decimal(_clean_number(value))
     except InvalidOperation:
         return Decimal(default)
+
+
+def _int(value, default=0):
+    try:
+        if value in (None, ''):
+            return default
+        return int(Decimal(_clean_number(value)))
+    except (InvalidOperation, ValueError):
+        return default
 
 
 def _redirect_for_role(user):
@@ -211,6 +241,8 @@ def _redirect_for_role(user):
         return redirect('collector')
     if profile.role in ('audit', 'manager'):
         return redirect('dashboard')
+    if profile.role == 'sales_manager':
+        return redirect('collector')
     return redirect('entry')
 
 
@@ -336,6 +368,7 @@ def _shift_snapshot(entry):
         'visa_entries': list(entry.visa_entries),
         'delivery_data': dict(entry.delivery_data),
         'staff_discount': str(entry.staff_discount),
+        'discount_entries': list(entry.discount_entries or []),
         'cash_cancel_amount': str(entry.cash_cancel_amount),
         'petty_cash': str(entry.petty_cash),
     }
@@ -399,9 +432,29 @@ def _shift_field_diff_lines_sales(snap, entry):
     diffs = _shift_field_diffs(snap, entry)
     lines = []
     if 'staff_discount' in diffs:
-        lines.append('Discount: ' + diffs['staff_discount'].replace('Changed from ', '').replace(' to ', ' → '))
+        old_rows = [Decimal(str(r.get('amount') or 0)) for r in (snap.get('discount_entries') or [])]
+        new_rows = [Decimal(str(r.get('amount') or 0)) for r in (entry.discount_entries or [])]
+        for i in range(max(len(old_rows), len(new_rows))):
+            o = old_rows[i] if i < len(old_rows) else None
+            n = new_rows[i] if i < len(new_rows) else None
+            if o is None:
+                lines.append(f'Discount #{i + 1}: added {n:.3f}')
+            elif n is None:
+                lines.append(f'Discount #{i + 1}: removed (was {o:.3f})')
+            elif o != n:
+                lines.append(f'Discount #{i + 1}: {o:.3f} → {n:.3f}')
+        lines.append('Discount total: ' + diffs['staff_discount'].replace('Changed from ', '').replace(' to ', ' → '))
     if 'visa_total' in diffs:
-        lines.append('Visa: ' + diffs['visa_total'].replace('Changed from ', '').replace(' to ', ' → '))
+        old_v = {str(x.get('serial', '')): Decimal(str(x.get('amount') or 0)) for x in (snap.get('visa_entries') or [])}
+        new_v = {str(x.get('serial', '')): Decimal(str(x.get('amount') or 0)) for x in (entry.visa_entries or [])}
+        for s in list(old_v) + [k for k in new_v if k not in old_v]:
+            if s not in old_v:
+                lines.append(f'Visa machine {s}: added {new_v[s]:.3f}')
+            elif s not in new_v:
+                lines.append(f'Visa machine {s}: removed (was {old_v[s]:.3f})')
+            elif old_v[s] != new_v[s]:
+                lines.append(f'Visa machine {s}: {old_v[s]:.3f} → {new_v[s]:.3f}')
+        lines.append('Visa total: ' + diffs['visa_total'].replace('Changed from ', '').replace(' to ', ' → '))
     for key, source_label in DELIVERY_SOURCES:
         for field, field_label in [('orders', 'orders'), ('amount', 'amount'), ('cancel_orders', 'cancelled orders'), ('cancel_amount', 'cancelled amount')]:
             k = f'{field}_{key}'
@@ -497,16 +550,44 @@ def _build_stepper(entry, handover, review_log):
     return {'steps': steps, 'complete': current_index is None}
 
 
+def _parse_discount_rows(request):
+    """Discount rows (Order Number + Amount) from a POST. Empty rows are dropped.
+    Returns None when the form sent no rows at all (an older form that only
+    sends one total), so the caller can fall back to that total."""
+    if 'discount_row_amount[]' not in request.POST and 'discount_order[]' not in request.POST:
+        return None
+    orders = request.POST.getlist('discount_order[]')
+    amounts = request.POST.getlist('discount_row_amount[]')
+    rows = []
+    for i, raw in enumerate(amounts):
+        amount = _dec(raw)
+        order = (orders[i] if i < len(orders) else '').strip()
+        if amount or order:
+            rows.append({'order_no': order, 'amount': f'{amount:.3f}'})
+    return rows
+
+
 def _apply_waiter_financials(request, entry):
     """Applies the cash/visa/delivery/discount fields from a POST to an entry.
     Shared by the waiter's own edit page and by Audit's inline correction on
     the Sales Review card, so a fix made in either place saves the same way."""
-    entry.staff_discount = _dec(request.POST.get('staff_discount'))
-    entry.petty_cash = _dec(request.POST.get('petty_cash'))
-    entry.cash_counts = {d: int(request.POST.get(f'denom_{d}', 0) or 0) for d in DENOMS}
-    entry.cash_counts_aed = {d: int(request.POST.get(f'denom_aed_{d}', 0) or 0) for d in AED_DENOMS}
-    entry.aed_exchange_rate = _dec(request.POST.get('aed_exchange_rate'), default='0.1000')
-    entry.cash_cancel_amount = _dec(request.POST.get('cash_cancel_amount'))
+    rows = _parse_discount_rows(request)
+    if rows is None:
+        entry.discount_entries = []
+        entry.staff_discount = _dec(request.POST.get('staff_discount'))
+    else:
+        entry.discount_entries = rows
+        entry.staff_discount = sum((Decimal(r['amount']) for r in rows), Decimal('0'))
+    # The waiter's cash numbers are view-only for Audit: only the waiter
+    # (or admin) can change them. Audit corrects the collector's section instead.
+    _role = getattr(getattr(request.user, 'profile', None), 'role', None)
+    if _role != 'audit':
+        entry.petty_cash = _dec(request.POST.get('petty_cash'))
+        entry.cash_counts = {d: _int(request.POST.get(f'denom_{d}', 0)) for d in DENOMS}
+        entry.cash_counts_aed = {d: _int(request.POST.get(f'denom_aed_{d}', 0)) for d in AED_DENOMS}
+        entry.aed_exchange_rate = _dec(request.POST.get('aed_exchange_rate'), default='0.1000')
+        entry.cash_cancel_amount = _dec(request.POST.get('cash_cancel_amount'))
+        entry.cash_cancel_order = request.POST.get('cash_cancel_order', '').strip()[:200]
 
     visa_rows = _parse_visa_rows(request)
     entry.visa_entries = [{'serial': r['serial'], 'amount': float(r['amount'])} for r in visa_rows]
@@ -514,16 +595,16 @@ def _apply_waiter_financials(request, entry):
     delivery_data = {}
     for key, _label in DELIVERY_SOURCES:
         delivery_data[key] = {
-            'orders': int(request.POST.get(f'orders_{key}', 0) or 0),
+            'orders': _int(request.POST.get(f'orders_{key}', 0)),
             'amount': float(_dec(request.POST.get(f'amount_{key}', 0))),
-            'cancel_orders': int(request.POST.get(f'cancel_orders_{key}', 0) or 0),
+            'cancel_orders': _int(request.POST.get(f'cancel_orders_{key}', 0)),
             'cancel_amount': float(_dec(request.POST.get(f'cancel_amount_{key}', 0))),
         }
     entry.delivery_data = delivery_data
 
     if request.FILES.get('discount_attachment'):
         entry.staff_discount_attachment = request.FILES['discount_attachment']
-    if request.FILES.get('cash_cancel_attachment'):
+    if request.FILES.get('cash_cancel_attachment') and _role != 'audit':
         entry.cash_cancel_attachment = request.FILES['cash_cancel_attachment']
     for key, _label in DELIVERY_SOURCES:
         uploaded = request.FILES.get(f'delivery_attachment_{key}')
@@ -591,8 +672,14 @@ def entry_view(request):
                 return redirect('entry')
             branch, _ = Branch.objects.get_or_create(name=branch_name)
 
+        submitted_late = False
         if profile.role == 'waiter':
-            date = timezone.localdate()  # server-side truth — never trust a client-submitted date for waiters
+            now = timezone.now()
+            date = branch.business_date(now)  # server-side truth (the branch's business day) — never trust a client-submitted date for waiters
+            if not branch.in_business_hours(now):
+                # closed right now: no submissions at all (the form also blocks this, but the server decides)
+                messages.error(request, f"Your branch is closed right now (opens {branch.open_label}, closes {branch.close_label}), so a report cannot be submitted. Please submit during opening hours.")
+                return redirect('entry')
         else:
             date = request.POST.get('date')
 
@@ -603,8 +690,12 @@ def entry_view(request):
             messages.error(request, 'Please fill in branch and date.')
             return redirect('entry')
 
-        cash_counts = {d: int(request.POST.get(f'denom_{d}', 0) or 0) for d in DENOMS}
-        cash_counts_aed = {d: int(request.POST.get(f'denom_aed_{d}', 0) or 0) for d in AED_DENOMS}
+        if shift not in dict(SHIFT_CHOICES):
+            messages.error(request, 'Please choose the shift (1, 2 or 3).')
+            return redirect('entry')
+
+        cash_counts = {d: _int(request.POST.get(f'denom_{d}', 0)) for d in DENOMS}
+        cash_counts_aed = {d: _int(request.POST.get(f'denom_aed_{d}', 0)) for d in AED_DENOMS}
         aed_exchange_rate = _dec(request.POST.get('aed_exchange_rate'), default='0.1000')
 
         visa_rows = _parse_visa_rows(request)
@@ -613,24 +704,39 @@ def entry_view(request):
         delivery_data = {}
         for key, _label in DELIVERY_SOURCES:
             delivery_data[key] = {
-                'orders': int(request.POST.get(f'orders_{key}', 0) or 0),
+                'orders': _int(request.POST.get(f'orders_{key}', 0)),
                 'amount': float(_dec(request.POST.get(f'amount_{key}', 0))),
-                'cancel_orders': int(request.POST.get(f'cancel_orders_{key}', 0) or 0),
+                'cancel_orders': _int(request.POST.get(f'cancel_orders_{key}', 0)),
                 'cancel_amount': float(_dec(request.POST.get(f'cancel_amount_{key}', 0))),
             }
+
+        # A receipt photo/PDF is mandatory whenever a cash cancellation or a discount is entered.
+        _disc_rows = _parse_discount_rows(request) or []
+        _disc_total = sum((Decimal(str(r['amount'])) for r in _disc_rows), Decimal('0')) or _dec(request.POST.get('discount_amount'))
+        _cancel_filled = _dec(request.POST.get('cash_cancel_amount')) > 0 or bool(request.POST.get('cash_cancel_order', '').strip())
+        if _cancel_filled and not request.FILES.get('cash_cancel_attachment'):
+            messages.error(request, 'Please attach the receipt photo for the cash cancellation.')
+            return redirect('entry')
+        if _disc_total > 0 and not request.FILES.get('discount_attachment'):
+            messages.error(request, 'Please attach the receipt photo for the discount.')
+            return redirect('entry')
 
         entry = ShiftEntry(
             branch=branch,
             date=date,
             shift=shift,
             accountant=accountant,
+            submitted_punch=(profile.punch_id or '') if profile.role == 'waiter' else '',
+            submitted_late=submitted_late,
             petty_cash=_dec(request.POST.get('petty_cash')),
             staff_discount=_dec(request.POST.get('discount_amount')),
+            discount_entries=_parse_discount_rows(request) or [],
             cash_counts=cash_counts,
             cash_counts_aed=cash_counts_aed,
             aed_exchange_rate=aed_exchange_rate,
             visa_entries=visa_entries,
             cash_cancel_amount=_dec(request.POST.get('cash_cancel_amount')),
+            cash_cancel_order=request.POST.get('cash_cancel_order', '').strip()[:200],
             delivery_data=delivery_data,
             notes=request.POST.get('notes', ''),
             # expected_foodics is set later by Audit, not by the waiter.
@@ -659,24 +765,47 @@ def entry_view(request):
         'active_tab': 'entry',
         'locked_branch': locked_branch,
         'head_cashier_name': profile.head_cashier_name if profile.role == 'waiter' else None,
-        'today': timezone.localdate() if profile.role == 'waiter' else None,
+        'today': (profile.branch.business_date() if profile.branch else timezone.localdate()) if profile.role == 'waiter' else None,
+        'punch_id': (profile.punch_id or '') if profile.role == 'waiter' else '',
+        'branch_hours': ({'open': profile.branch.open_label, 'close': profile.branch.close_label, 'next_day': profile.branch.closes_next_day}
+                         if (profile.role == 'waiter' and profile.branch and profile.branch.has_custom_hours) else None),
+        'outside_hours': bool(profile.role == 'waiter' and profile.branch and not profile.branch.in_business_hours()),
         'submitted_ref': request.GET.get('submitted'),
         'submitted_branch': locked_branch.name if locked_branch else None,
     }
     return render(request, 'salesapp/entry.html', context)
 
 
-@role_required('collector', 'audit', 'admin')
+@role_required('collector', 'audit', 'sales_manager', 'admin')
 def collector_view(request):
+    is_viewer = request.user.profile.role == 'sales_manager'   # the Sales Department Manager only looks
     if request.method == 'POST':
+        if is_viewer:
+            raise PermissionDenied('This account can only view the collector page.')
         entry_id = request.POST.get('shift_entry_id')
         shift_entry = get_object_or_404(ShiftEntry, id=entry_id)
 
-        cash_counts = {d: int(request.POST.get(f'cdenom_{d}', 0) or 0) for d in DENOMS}
-        cash_counts_aed = {d: int(request.POST.get(f'cdenom_aed_{d}', 0) or 0) for d in AED_DENOMS}
+        cash_counts = {d: _int(request.POST.get(f'cdenom_{d}', 0)) for d in DENOMS}
+        cash_counts_aed = {d: _int(request.POST.get(f'cdenom_aed_{d}', 0)) for d in AED_DENOMS}
 
         handover = CollectorHandover.objects.filter(shift_entry=shift_entry).first()
         is_new = handover is None
+        by_audit_role = request.user.profile.role == 'audit'
+        if by_audit_role and is_new:
+            # Audit can correct the collector's numbers only AFTER the collector has saved them.
+            messages.error(request, "The collector has not saved this shift's cash yet — Audit can correct his numbers only after he does.")
+            return redirect(_safe_next(request) or _reopen_url(request, '/collector/', entry_id))
+        # Cash proof: photo of the invoice / receipt. The collector must attach it with the
+        # first count; Audit corrections keep the existing photo unless a new one is sent.
+        proof = request.FILES.get('proof_attachment')
+        if proof:
+            ext = proof.name.rsplit('.', 1)[-1].lower() if '.' in proof.name else ''
+            if ext not in ('jpg', 'jpeg', 'png', 'webp', 'heic', 'pdf') or proof.size > 10 * 1024 * 1024:
+                messages.error(request, 'Cash proof must be a photo (JPG/PNG/WEBP/HEIC) or PDF, up to 10 MB.')
+                return redirect(_safe_next(request) or _reopen_url(request, '/collector/', entry_id))
+        elif request.user.profile.role == 'collector' and not (handover and handover.proof_attachment):
+            messages.error(request, 'Please attach the photo of the cash invoice (Cash Proof) before saving.')
+            return redirect(_safe_next(request) or _reopen_url(request, '/collector/', entry_id))
         if is_new:
             handover = CollectorHandover(shift_entry=shift_entry)
         before_snap = _handover_snapshot(handover)
@@ -690,7 +819,10 @@ def collector_view(request):
         handover.collector_name = request.POST.get('collector_name', '').strip()
         handover.cash_counts = cash_counts
         handover.cash_counts_aed = cash_counts_aed
-        handover.notes = request.POST.get('notes', '')
+        if not by_audit_role:   # the collector's note stays his — Audit writes its own Audit Note
+            handover.notes = request.POST.get('notes', '')
+        if proof:
+            handover.proof_attachment = proof
         # A new count invalidates any earlier Cash Reconciliation sign-off.
         handover.reconciled = False
         handover.reconciled_at = None
@@ -708,6 +840,8 @@ def collector_view(request):
             details = '\n'.join(diff_lines)
         else:
             details = f'Saved again, counts unchanged: {total} RO'
+        if proof:
+            details += '\nCash proof photo attached'
         log_activity(request, 'handover_saved', description=shift_entry.reference_id, details=details)
         messages.success(request, 'Collector handover saved.')
         return redirect(_safe_next(request) or _reopen_url(request, '/collector/', entry_id))
@@ -761,24 +895,26 @@ def collector_view(request):
         entry_visa_rows = _build_visa_rows(selected_entry)
 
     shift_filter = request.GET.getlist('shift_filter')
-    branch_filter = request.GET.get('branch_filter', '').strip()
+    selected_branches = _read_branch_filter(request)
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()
     all_entries_qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=False).order_by('-created_at')
     if shift_filter:
         all_entries_qs = all_entries_qs.filter(shift__in=shift_filter)
-    if branch_filter:
-        all_entries_qs = all_entries_qs.filter(branch__name__icontains=branch_filter)
+    all_entries_qs = _apply_branch_filter(all_entries_qs, selected_branches)
     if date_from:
         all_entries_qs = all_entries_qs.filter(date__gte=date_from)
     if date_to:
         all_entries_qs = all_entries_qs.filter(date__lte=date_to)
     if search_ref:
         all_entries_qs = all_entries_qs.filter(reference_id__icontains=search_ref)
+    selected_collected = _read_collected(request)
+    collected_ctx = _collected_context(all_entries_qs, selected_collected)
+    all_entries_qs = _apply_collected(all_entries_qs, selected_collected)
 
     group_summary = None
-    if branch_filter and (date_from or date_to) and all_entries_qs.exists():
-        agg = all_entries_qs.aggregate(total_cash=Sum('cash_total'))
+    if selected_branches and (date_from or date_to) and all_entries_qs.exists():
+        agg = {'total_cash': sum((e.final_cash_total for e in all_entries_qs.select_related('collector')), Decimal('0'))}
         group_summary = {
             'count': all_entries_qs.count(),
             'shifts': sorted(set(all_entries_qs.values_list('shift', flat=True))),
@@ -802,7 +938,7 @@ def collector_view(request):
             e.simple_status = 'reconciled'
         else:
             e.simple_status = 'collected'
-        group['total_cash'] += e.cash_total
+        group['total_cash'] += e.final_cash_total
     branch_groups = sorted(branch_groups_map.values(), key=lambda g: g['branch'].name)
 
     # Sort each branch's entries by date (newest first) and flag the first
@@ -828,7 +964,7 @@ def collector_view(request):
         'all_entries': all_entries_qs,
         'branch_groups': branch_groups,
         'shift_filter': shift_filter,
-        'branch_filter': branch_filter,
+        **_branch_picker_context(selected_branches),
         'date_from': date_from,
         'date_to': date_to,
         'group_summary': group_summary,
@@ -848,6 +984,8 @@ def collector_view(request):
         'cash_history': cash_history,
         'next_url': _safe_next(request),
         'search_ref': search_ref,
+        **collected_ctx,
+        'is_viewer': is_viewer,
         'active_tab': 'collector',
     }
     return render(request, 'salesapp/collector.html', context)
@@ -879,6 +1017,8 @@ def dashboard_view(request):
         if request.POST.get('shift'):
             entry.shift = request.POST.get('shift')
         entry.accountant = request.POST.get('accountant', '').strip()
+        if entry.accountant != old_accountant:
+            entry.submitted_punch = _punch_for(entry.branch, entry.accountant)   # a different name -> its own Punch ID (or none)
         visa_rows = _apply_waiter_financials(request, entry)
         entry.audit_notes = request.POST.get('audit_notes', '').strip()
         if 'expected_foodics' in request.POST:
@@ -966,14 +1106,13 @@ def dashboard_view(request):
     qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=False)
 
     shift_filter = request.GET.getlist('shift_filter')
-    branch_filter = request.GET.get('branch_filter', '').strip()
+    selected_branches = _read_branch_filter(request)
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()
     search_ref = request.GET.get('search_ref', '').strip()
     if shift_filter:
         qs = qs.filter(shift__in=shift_filter)
-    if branch_filter:
-        qs = qs.filter(branch__name__icontains=branch_filter)
+    qs = _apply_branch_filter(qs, selected_branches)
     if date_from:
         qs = qs.filter(date__gte=date_from)
     if date_to:
@@ -982,19 +1121,21 @@ def dashboard_view(request):
         qs = qs.filter(reference_id__icontains=search_ref)
     qs = qs.order_by('-created_at')
 
+    # where every shift is in its life; the Stage filter is applied after counting, so each
+    # pill shows how many shifts sit in that stage under the OTHER filters
+    staged = [(e, _entry_stage(e)) for e in qs]
+    stage_counts = {value: 0 for value, _ in ENTRY_STAGES}
+    for _, st in staged:
+        stage_counts[st] += 1
+    valid_stages = {value for value, _ in ENTRY_STAGES}
+    selected_stages = [v for v in request.GET.getlist('stage') if v in valid_stages]
+    if selected_stages:
+        staged = [(e, st) for e, st in staged if st in selected_stages]
+
     branch_groups_map = {}
-    for e in qs:
+    for e, stage in staged:
         foodics_entered = e.expected_foodics != 0
         has_issue = foodics_entered and abs(e.variance) > threshold
-        handover = getattr(e, 'collector', None)
-        if not e.is_audited:
-            stage = 'awaiting_sales'
-        elif handover is None:
-            stage = 'awaiting_collection'
-        elif not handover.reconciled:
-            stage = 'awaiting_cash_approval'
-        else:
-            stage = 'complete'
 
         group = branch_groups_map.setdefault(e.branch_id, {
             'branch': e.branch,
@@ -1029,7 +1170,10 @@ def dashboard_view(request):
         'branch_groups': branch_groups,
         'shift_filter': shift_filter,
         'shift_choices': SHIFT_CHOICES,
-        'branch_filter': branch_filter,
+        **_branch_picker_context(selected_branches),
+        'stage_options': [(value, label, stage_counts[value]) for value, label in ENTRY_STAGES],
+        'selected_stages': selected_stages,
+        'stage_qs': ''.join(f'stage={v}&' for v in selected_stages),
         'date_from': date_from,
         'date_to': date_to,
         'search_ref': search_ref,
@@ -1281,8 +1425,233 @@ def import_branches_view(request):
     return redirect('add_branch')
 
 
+def _punch_for(branch, name):
+    """The Punch ID of the one waiter of `branch` whose name is `name`, else ''."""
+    if not name:
+        return ''
+    matches = list(UserProfile.objects.filter(role='waiter', branch=branch, head_cashier_name__iexact=name.strip())[:2])
+    return matches[0].punch_id if len(matches) == 1 else ''
+
+
+ENTRY_STAGES = [
+    ('awaiting_sales', 'Awaiting Sales Review'),
+    ('awaiting_collection', 'Awaiting Collection'),
+    ('awaiting_cash_approval', 'Awaiting Cash Approval'),
+    ('complete', 'Complete'),
+]
+
+
+def _entry_stage(entry):
+    """Where a shift is in its life — the same four stages the Audit list shows."""
+    handover = getattr(entry, 'collector', None)
+    if not entry.is_audited:
+        return 'awaiting_sales'
+    if handover is None:
+        return 'awaiting_collection'
+    if not handover.reconciled:
+        return 'awaiting_cash_approval'
+    return 'complete'
+
+
+def _brand_of(name):
+    """A branch's brand is the first word of its name: 'Kucu Ibri' -> 'KUCU'."""
+    first = (name or '').strip().split(' ')[0]
+    return first.upper() or 'OTHER'
+
+
+def _read_branch_filter(request):
+    """Branch names picked in the filter: ?branch_filter=A&branch_filter=B"""
+    return [v.strip() for v in request.GET.getlist('branch_filter') if v.strip()]
+
+
+def _apply_branch_filter(qs, selected, field='branch__name'):
+    """Keep only the picked branches. A value that is not an exact branch name
+    (an old bookmark such as ?branch_filter=kucu) still works as a text search."""
+    if not selected:
+        return qs
+    known = set(Branch.objects.values_list('name', flat=True))
+    q = Q()
+    for v in selected:
+        q |= Q(**{f'{field}__iexact': v}) if v in known else Q(**{f'{field}__icontains': v})
+    return qs.filter(q)
+
+
+COLLECTED_OPTIONS = [('no', 'Not collected'), ('yes', 'Collected'), ('recon', 'Reconciled')]
+
+
+def _collected_q(value):
+    """Exactly one cash state per shift, so the three pills never overlap:
+    not collected (no count from the collector yet) / collected (counted, Audit has not approved yet) / reconciled (Audit approved)."""
+    if value == 'no':
+        return Q(collector__isnull=True)
+    if value == 'yes':
+        return Q(collector__isnull=False, collector__reconciled=False)
+    return Q(collector__isnull=False, collector__reconciled=True)
+
+
+def _read_collected(request):
+    valid = {v for v, _ in COLLECTED_OPTIONS}
+    return [v for v in request.GET.getlist('collected') if v in valid]
+
+
+def _apply_collected(qs, selected):
+    """Any combination of the pills; none picked (or all three) shows everything."""
+    picked = {v for v in selected}
+    if not picked or len(picked) == len(COLLECTED_OPTIONS):
+        return qs
+    q = Q()
+    for v in picked:
+        q |= _collected_q(v)
+    return qs.filter(q)
+
+
+def _collected_context(qs, selected):
+    """Pill data: how many shifts are in each cash state under the OTHER filters."""
+    return {
+        'collected_options': [(v, label, qs.filter(_collected_q(v)).count()) for v, label in COLLECTED_OPTIONS],
+        'selected_collected': selected,
+        'collected_qs': ''.join(f'collected={v}&' for v in selected),
+    }
+
+
+def _branch_picker_context(selected):
+    """Everything the shared branch picker needs: branches grouped by brand,
+    which are ticked, a query-string fragment that keeps the choice in links,
+    and a short label ('All KUCU, Fresh Seeb') for headings."""
+    groups = {}
+    for b in Branch.objects.order_by('name'):
+        groups.setdefault(_brand_of(b.name), []).append(
+            {'name': b.name, 'checked': b.name in selected, 'inactive': not b.is_active})
+    ordered, parts, covered = [], [], set()
+    for brand, branches in sorted(groups.items()):
+        all_checked = bool(branches) and all(x['checked'] for x in branches)
+        ordered.append({'brand': brand, 'branches': branches, 'all_checked': all_checked})
+        if all_checked and len(branches) > 1:
+            parts.append(f'All {brand}')
+            covered.update(x['name'] for x in branches)
+    parts += [n for n in selected if n not in covered]
+    label = ', '.join(parts[:3]) + (f' +{len(parts) - 3} more' if len(parts) > 3 else '')
+    return {
+        'branch_picker_groups': ordered,
+        'branch_selected_count': len(selected),
+        'branch_qs': ''.join(f'branch_filter={quote(n)}&' for n in selected),
+        'branch_filter': label,
+    }
+
+
+_ARABIC_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789')
+
+
+@never_cache
+@role_required('waiter')
+def business_date_view(request):
+    """Tiny JSON answer for the waiter's form: which business date a report would get
+    right now, and whether the branch is inside its opening hours. The form asks again
+    every half minute (and when the tab is shown again), so the date updates by itself.
+    The date that is actually SAVED is always computed by the server when Submit is pressed."""
+    branch = request.user.profile.branch
+    if branch is None:
+        return JsonResponse({'error': 'no branch'}, status=400)
+    day = branch.business_date()
+    return JsonResponse({
+        'date': day.isoformat(),
+        'label': date_filter(day, 'd M Y'),
+        'outside_hours': not branch.in_business_hours(),
+        'custom': branch.has_custom_hours,
+        'open': branch.open_label,
+        'close': branch.close_label,
+        'next_day': branch.closes_next_day,
+    })
+
+
+def _parse_hhmm(raw):
+    """A time somebody TYPED -> datetime.time (to the minute), or None.
+    Accepts 10:00, 10.30, 1000, 930, 10, 3, 22:15, 10 pm, 10:30pm — and Arabic digits."""
+    import re
+    text = (raw or '').translate(_ARABIC_DIGITS).strip().lower()
+    suffix = None
+    m = re.search(r'\s*(am|pm)$', text)
+    if m:
+        suffix, text = m.group(1), text[:m.start()].strip()
+    text = re.sub(r'[\s.,:٫،]+', ':', text)
+    if re.fullmatch(r'\d{1,2}:\d{1,2}', text):
+        hour, minute = (int(x) for x in text.split(':'))
+    elif re.fullmatch(r'\d{3,4}', text):
+        hour, minute = int(text[:-2]), int(text[-2:])
+    elif re.fullmatch(r'\d{1,2}', text):
+        hour, minute = int(text), 0
+    else:
+        return None
+    if suffix:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if suffix == 'pm' else 0)
+    if hour > 23 or minute > 59:
+        return None
+    return datetime.time(hour, minute)
+
+
 @role_required('audit', 'manager', 'admin')
-def daily_sales_report_view(request):
+def audit_settings_view(request):
+    """Audit's Settings page: each branch's opening and closing time, typed in by
+    hand (the closing time may be on the next calendar day, e.g. 10:00 -> 03:00). A
+    report belongs to the business day it was submitted in; anything submitted
+    after the day ended but before the next one starts still counts for the day
+    that just closed. Managers can look but not change."""
+    is_viewer = request.user.profile.role == 'manager'
+
+    if request.method == 'POST':
+        if is_viewer:
+            raise PermissionDenied('Managers have view-only access.')
+        saved, bad, same = 0, [], []
+        for b in Branch.objects.all():
+            raw_start, raw_end = request.POST.get(f'start_{b.id}', ''), request.POST.get(f'end_{b.id}', '')
+            if not raw_start.strip() and not raw_end.strip():
+                continue
+            start, end = _parse_hhmm(raw_start), _parse_hhmm(raw_end)
+            if start is None or end is None:
+                bad.append(b.name)
+                continue
+            if start == end:
+                same.append(b.name)
+                continue
+            old_window = b.day_window
+            old_start, old_end = b.day_cutoff, b.effective_end
+            if (start, end) == (old_start, old_end):
+                continue
+            b.day_cutoff = start
+            b.day_end = end                                   # exactly what was typed — nothing is derived
+            b.save(update_fields=['day_cutoff', 'day_end'])
+            log_activity(request, 'branch_edited', description=f'{b.name}: business day',
+                         details=f'Opening hours changed from {old_window} to {b.day_window}')
+            saved += 1
+        if bad:
+            messages.error(request, 'Type the times like 10 am, 3:30 pm or 22:30. Not a valid time for: ' + ', '.join(bad))
+        if same:
+            messages.error(request, "Opening and closing can't be the same time: " + ', '.join(same))
+        if saved:
+            messages.success(request, f'Saved the opening hours of {saved} branch{"es" if saved != 1 else ""}.')
+        elif not bad and not same:
+            messages.info(request, 'Nothing changed.')
+        return redirect('audit_settings')
+
+    groups = {}
+    for b in Branch.objects.order_by('name'):
+        groups.setdefault(_brand_of(b.name), []).append({
+            'id': b.id, 'name': b.name, 'inactive': not b.is_active,
+            'start': _fmt12(b.day_cutoff), 'end': _fmt12(b.effective_end),
+            'start24': b.day_cutoff.strftime('%H:%M'), 'end24': b.effective_end.strftime('%H:%M'),
+            'window': b.day_window, 'today': b.business_date(),
+        })
+    return render(request, 'salesapp/audit_settings.html', {
+        'active_tab': 'audit_settings',
+        'brand_groups': [{'brand': k, 'branches': v} for k, v in sorted(groups.items())],
+        'is_viewer': is_viewer,
+        'now': timezone.localtime(),
+    })
+
+
+def _daily_report_context(request):
     """Daily Sales report: a card with the amount for every item, and under it
     one full table with every shift and every field.
     The cards (and the table's total row) count only COMPLETE shifts — Daily
@@ -1295,18 +1664,20 @@ def daily_sales_report_view(request):
     today = timezone.localdate()
     date_from = request.GET.get('date_from', '').strip() if not first_load else today.replace(day=1).isoformat()
     date_to = request.GET.get('date_to', '').strip() if not first_load else today.isoformat()
-    branch_id = request.GET.get('branch', '').strip()
+    selected_branches = _read_branch_filter(request)
     shift_filter = request.GET.getlist('shift')
+    selected_collected = _read_collected(request)
 
     qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=False)
     if date_from:
         qs = qs.filter(date__gte=date_from)
     if date_to:
         qs = qs.filter(date__lte=date_to)
-    if branch_id:
-        qs = qs.filter(branch_id=branch_id)
+    qs = _apply_branch_filter(qs, selected_branches)
     if shift_filter:
         qs = qs.filter(shift__in=shift_filter)
+    collected_ctx = _collected_context(qs, selected_collected)
+    qs = _apply_collected(qs, selected_collected)
     entries = list(qs.order_by('-date', 'branch__name', 'shift'))
 
     zero = Decimal('0')
@@ -1327,6 +1698,9 @@ def daily_sales_report_view(request):
 
     totals = {c['key']: zero for c in columns}
     n_sales = n_cash = 0
+    sales_wait = zero; n_sales_wait = 0
+    cash_collected = zero; n_collected = 0      # counted by the collector, not reconciled yet
+    cash_missing = zero; n_missing = 0          # not collected: the waiter's cash still to come
     rows = []
     for e in entries:
         h = getattr(e, 'collector', None)
@@ -1334,6 +1708,12 @@ def daily_sales_report_view(request):
         cash_ok = h is not None and h.reconciled
         n_sales += 1 if sales_ok else 0
         n_cash += 1 if cash_ok else 0
+        if not sales_ok:
+            sales_wait += dec(e.sales_actual); n_sales_wait += 1
+        if h is None:
+            cash_missing += dec(e.cash_total); n_missing += 1
+        elif not cash_ok:
+            cash_collected += dec(h.cash_total); n_collected += 1
 
         dl = e.delivery_data or {}
         vals = {
@@ -1367,14 +1747,20 @@ def daily_sales_report_view(request):
 
     cards = [
         {'title': 'Sales Actual', 'amount': totals['sales_actual'], 'shifts': n_sales,
-         'hint': 'cash + visa − discount', 'pending': len(entries) - n_sales,
-         'pending_text': 'waiting for sales review'},
+         'hint': 'cash + visa · approved by sales review',
+         'lines': [
+             {'label': 'Waiting for sales review', 'amount': sales_wait, 'n': n_sales_wait, 'cls': 'wait'},
+             {'label': 'All shifts', 'amount': totals['sales_actual'] + sales_wait, 'n': len(entries), 'cls': 'all'},
+         ]},
         {'title': 'Cash', 'amount': totals['col_cash'], 'shifts': n_cash,
-         'hint': 'as counted by the collector', 'pending': len(entries) - n_cash,
-         'pending_text': 'waiting for cash reconciliation'},
+         'hint': 'as counted by the collector · reconciled by audit',
+         'lines': [
+             {'label': 'Collected, waiting for audit', 'amount': cash_collected, 'n': n_collected, 'cls': 'mid'},
+             {'label': 'Not collected yet (waiter cash)', 'amount': cash_missing, 'n': n_missing, 'cls': 'wait'},
+         ]},
     ]
 
-    return render(request, 'salesapp/daily_sales_report.html', {
+    return {
         'active_tab': 'daily_report',
         'cards': cards,
         'columns': columns,
@@ -1383,13 +1769,138 @@ def daily_sales_report_view(request):
         'rows': rows,
         'total_cells': [{'value': totals[c['key']], 'int': c['key'] == 'orders'} for c in columns],
         'entry_count': len(entries),
-        'branches': Branch.objects.filter(is_active=True).order_by('name'),
+        **_branch_picker_context(selected_branches),
         'shift_choices': SHIFT_CHOICES,
         'date_from': date_from,
         'date_to': date_to,
-        'branch_id': branch_id,
         'shift_filter': shift_filter,
-    })
+        **collected_ctx,
+        'query_string': request.GET.urlencode(),
+    }
+
+
+REPORT_ROLES = ('audit', 'manager', 'sales_manager', 'admin')
+
+
+@role_required(*REPORT_ROLES)
+def daily_sales_report_view(request):
+    return render(request, 'salesapp/daily_sales_report.html', _daily_report_context(request))
+
+
+@role_required(*REPORT_ROLES)
+def daily_sales_report_xlsx_view(request):
+    """The same report (same filters) as an Excel file."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    ctx = _daily_report_context(request)
+    columns, rows = ctx['columns'], ctx['rows']
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Daily Sales Report'
+    navy, cream, grey = '1F3B4D', 'F7F5EE', '9A9585'
+    thin = Side(style='thin', color='E3DFD3')
+    NUM = '#,##0.000;[Red]-#,##0.000'
+
+    def text(cell, value):
+        """Write user-supplied text as plain text — never as a formula (a name starting with = would otherwise run)."""
+        cell.value = '' if value is None else str(value)
+        cell.data_type = 's'
+
+    n_lead = 7                                   # Date, Branch, Submitted By, Shift, Ref, Sales, Cash
+    first_val_col = n_lead + 1
+    last_col = n_lead + len(columns)
+    sales_col, cash_col = 6, 7                   # status columns that decide what a total counts
+    title_row = 1
+    grp_row, head_row = 3, 4
+    first = head_row + 1
+    last = head_row + len(rows)
+    total_row = last + 2
+
+    ws.cell(title_row, 1, 'Daily Sales Report').font = Font(bold=True, size=16, color=navy)
+
+    # group header
+    sales_n = ctx['sales_col_count']
+    ws.cell(grp_row, first_val_col, 'Daily Sales')
+    ws.merge_cells(start_row=grp_row, start_column=first_val_col, end_row=grp_row, end_column=first_val_col + sales_n - 1)
+    ws.cell(grp_row, first_val_col + sales_n, 'Cash')
+    ws.merge_cells(start_row=grp_row, start_column=first_val_col + sales_n, end_row=grp_row, end_column=last_col)
+    for col in range(1, last_col + 1):
+        g = ws.cell(grp_row, col)
+        g.font = Font(bold=True, color=navy)
+        g.alignment = Alignment(horizontal='center')
+        g.fill = PatternFill('solid', fgColor='E9E5D8' if col >= first_val_col else 'FFFFFF')
+
+    heads = ['Date', 'Branch', 'Submitted By', 'Shift', 'Ref', 'Sales Review', 'Cash Status'] + [c['label'] for c in columns]
+    for i, h in enumerate(heads, start=1):
+        c = ws.cell(head_row, i, h)
+        c.font = Font(bold=True, color='FFFFFF')
+        c.fill = PatternFill('solid', fgColor=navy)
+        c.alignment = Alignment(horizontal='left' if i <= n_lead else 'right', vertical='center', wrap_text=True)
+    ws.row_dimensions[head_row].height = 32
+
+    cash_label = {'reconciled': 'Reconciled', 'collected': 'Collected', 'not collected': 'Not collected'}
+    for r, row in enumerate(rows, start=first):
+        e = row['entry']
+        c = ws.cell(r, 1, e.date); c.number_format = 'dd mmm yyyy'; c.alignment = Alignment(horizontal='left')
+        text(ws.cell(r, 2), e.branch.name)
+        who = e.accountant or ''
+        if e.submitted_punch:
+            who = f'{who} · {e.submitted_punch}' if who else str(e.submitted_punch)
+        text(ws.cell(r, 3), who)
+        text(ws.cell(r, 4), e.shift)
+        text(ws.cell(r, 5), e.reference_id)
+        text(ws.cell(r, 6), 'Approved' if row['sales_ok'] else 'Pending')
+        text(ws.cell(r, 7), cash_label.get(row['cash_state'], row['cash_state']))
+        for i, cell in enumerate(row['cells']):
+            xc = ws.cell(r, first_val_col + i)
+            if cell['value'] is None:
+                continue
+            xc.value = int(cell['value']) if cell['int'] else float(cell['value'])
+            xc.number_format = '0' if cell['int'] else NUM
+            xc.alignment = Alignment(horizontal='right')
+            if not cell['counted']:
+                xc.font = Font(color='B5B0A0', italic=True)
+
+    # totals: live formulas that add only the completed shifts
+    ws.cell(total_row, 1, 'Total — completed shifts only').font = Font(bold=True, color='FFFFFF')
+    for col in range(1, last_col + 1):
+        ws.cell(total_row, col).fill = PatternFill('solid', fgColor=navy)
+    if rows:
+        for i, c in enumerate(columns):
+            letter = get_column_letter(first_val_col + i)
+            key_col = get_column_letter(sales_col if c['side'] == 'sales' else cash_col)
+            crit = 'Approved' if c['side'] == 'sales' else 'Reconciled'
+            t = ws.cell(total_row, first_val_col + i,
+                        f'=SUMIFS({letter}{first}:{letter}{last},{key_col}{first}:{key_col}{last},"{crit}")')
+            t.number_format = '0' if c['key'] == 'orders' else NUM
+            t.font = Font(bold=True, color='FFFFFF')
+            t.alignment = Alignment(horizontal='right')
+
+    widths = {1: 13, 2: 24, 3: 24, 4: 7, 5: 16, 6: 14, 7: 15}
+    for col in range(1, last_col + 1):
+        ws.column_dimensions[get_column_letter(col)].width = widths.get(col, 14)
+    ws.freeze_panes = ws.cell(first, first_val_col)
+    if rows:
+        ws.auto_filter.ref = f'A{head_row}:{get_column_letter(last_col)}{last}'
+    ws.page_setup.orientation = 'landscape'
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.sheet_view.showGridLines = False
+    for r in range(first, last + 1):
+        for col in range(1, last_col + 1):
+            ws.cell(r, col).border = Border(bottom=thin)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    name = f"daily_sales_report_{timezone.localdate().isoformat()}.xlsx"
+    resp = HttpResponse(buf.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    resp['Content-Disposition'] = f'attachment; filename="{name}"'
+    return resp
 
 
 @role_required('audit', 'admin')
@@ -1780,6 +2291,19 @@ def cash_reconcile_action_view(request):
             messages.success(request, f'{approved} shift(s) reconciled.')
         if skipped:
             messages.error(request, f'{skipped} shift(s) have a cash difference and need their own note.')
+    elif action == 'save_note':
+        note = request.POST.get('note', '').strip()
+        if not handovers:
+            messages.error(request, 'That shift was already reconciled or no longer exists.')
+        elif not note:
+            messages.error(request, 'Please write the Audit note first.')
+        else:
+            h = handovers[0]
+            h.reconcile_note = note
+            h.save(update_fields=['reconcile_note'])
+            log_activity(request, 'cash_reconciled', description=h.shift_entry.reference_id,
+                         details=f'Audit note (cash not approved yet):\n"{note}"')
+            messages.success(request, 'Audit note saved.')
     elif action == 'approve_one':
         note = request.POST.get('note', '').strip()
         if not handovers:

@@ -1,6 +1,7 @@
 {% extends "salesapp/base.html" %}
 {% load app_filters %}
 {% block content %}
+<style>input[readonly]{background:#F3F1EA !important; color:#6F6A5C; cursor:not-allowed;}</style>
 
 <div class="card">
   <h3>Edit Entry — {{ entry.reference_id }}</h3>
@@ -30,9 +31,10 @@
 
   <div class="card">
     <h3>Cash Report</h3>
+    {% if request.user.profile.role == 'audit' %}<div style="background:#FAEEDA; color:#854F0B; font-size:12.5px; font-weight:600; padding:8px 12px; border-radius:8px; margin:0 0 12px;">🔒 The waiter's cash numbers are view only. Audit can correct the collector's numbers in the Cash tab, after the collector has saved them.</div>{% endif %}
     <div style="margin-bottom:14px;">
       <label style="display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:0;">
-        <input type="checkbox" id="hasAedCheckbox" style="width:auto;" onchange="toggleAedSection()">
+        <input type="checkbox" id="hasAedCheckbox" style="width:auto;" onchange="toggleAedSection()" {% if request.user.profile.role == 'audit' %}disabled{% endif %}>
         This shift also includes AED cash
       </label>
       <input type="hidden" value="{{ entry.aed_exchange_rate|default:'0.1000' }}" name="aed_exchange_rate" id="aedRate" class="calc-input">
@@ -44,7 +46,7 @@
         {% for d in denoms %}
         <div class="denom-row">
           <div class="denom-label">{{ d }}</div>
-          <input type="number" min="0" value="0" style="width:90px;" name="denom_{{ d }}" data-denom="{{ d }}" class="calc-input">
+          <input type="number" min="0" value="0" style="width:90px;" name="denom_{{ d }}" data-denom="{{ d }}" class="calc-input" {% if request.user.profile.role == 'audit' %}readonly{% endif %}>
           <div class="denom-amount" id="denomAmt_{{ d }}" style="width:90px; color:#8A8578; font-size:13px;">0.000</div>
         </div>
         {% endfor %}
@@ -56,7 +58,7 @@
         {% for d in aed_denoms %}
         <div class="denom-row">
           <div class="denom-label">{{ d }}</div>
-          <input type="number" min="0" value="0" style="width:90px;" name="denom_aed_{{ d }}" data-denom-aed="{{ d }}" class="calc-input">
+          <input type="number" min="0" value="0" style="width:90px;" name="denom_aed_{{ d }}" data-denom-aed="{{ d }}" class="calc-input" {% if request.user.profile.role == 'audit' %}readonly{% endif %}>
           <div class="denom-amount" id="denomAedAmt_{{ d }}" style="width:220px; color:#8A8578; font-size:13px;">0.000</div>
         </div>
         {% endfor %}
@@ -64,25 +66,28 @@
       </div>
     </div>
     <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span id="cashTotalDisplay">0.000</span></div>
-    <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount (after cancellation)</span><span id="cashActualDisplay">0.000 RO</span></div>
 
-    <div class="grid grid-2" style="margin-bottom:14px;">
-      <div><label>Staff Discount / Coupons</label><input name="staff_discount" type="number" step="0.001" value="{{ entry.staff_discount }}" class="calc-input"></div>
-      <div><label>Discount Receipt (photo/PDF)</label>
-        {% if entry.staff_discount_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.staff_discount_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
-        <input type="file" name="discount_attachment" accept="image/*,.pdf">
-      </div>
+    <h3 style="margin-top:20px; font-size:14px;">Discount</h3>
+    {% include "salesapp/_discount_rows.html" with d_entry=entry %}
+    <div style="margin:12px 0 14px;"><label>Discount Receipt (photo/PDF)</label>
+      {% if entry.staff_discount_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.staff_discount_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
+      <input type="file" name="discount_attachment" accept="image/*,.pdf">
     </div>
     <div class="grid grid-2" style="margin-bottom:14px;">
-      <div><label>Petty Cash Amount</label><input name="petty_cash" type="number" step="0.001" value="{{ entry.petty_cash }}"></div>
+      <div><label>Petty Cash Amount</label><input name="petty_cash" type="number" step="0.001" value="{{ entry.petty_cash }}" {% if request.user.profile.role == 'audit' %}readonly{% endif %}></div>
     </div>
     <div class="grid grid-2" style="margin-bottom:14px;">
-      <div><label>Cash Cancelled Order — Amount</label><input name="cash_cancel_amount" type="number" step="0.001" value="{{ entry.cash_cancel_amount }}" class="calc-input"></div>
+      <div><label>Cash Cancelled Order — Order Number</label><input name="cash_cancel_order" type="text" maxlength="200" value="{{ entry.cash_cancel_order }}" {% if request.user.profile.role == 'audit' %}readonly{% endif %}></div>
+    </div>
+    <div class="grid grid-2" style="margin-bottom:14px;">
+      <div><label>Cash Cancelled Order — Amount</label><input name="cash_cancel_amount" type="number" step="0.001" value="{{ entry.cash_cancel_amount }}" class="calc-input" {% if request.user.profile.role == 'audit' %}readonly{% endif %}></div>
       <div><label>Cash Cancelled Order — Receipt</label>
         {% if entry.cash_cancel_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.cash_cancel_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
-        <input type="file" name="cash_cancel_attachment" accept="image/*,.pdf">
+        <input type="file" name="cash_cancel_attachment" accept="image/*,.pdf" {% if request.user.profile.role == 'audit' %}disabled{% endif %}>
       </div>
     </div>
+    <div class="total-strip" style="margin-top:12px;"><span>Cash Total</span><span id="cashTotalBelowDisplay">0.000 RO</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Cash Total with Cancellation (information only)</span><span id="cashActualDisplay">0.000 RO</span></div>
     </div>
 
     <div class="card">
@@ -256,20 +261,20 @@ function calcAll(){
   document.querySelectorAll('[data-del-amount]').forEach(inp => deliveryTotal += (parseFloat(inp.value)||0));
   document.getElementById('deliveryTotalDisplay').textContent = deliveryTotal.toFixed(3);
 
-  const discount = parseFloat(document.querySelector('[name="staff_discount"]').value) || 0;
   const cashCancel = parseFloat(document.querySelector('[name="cash_cancel_amount"]').value) || 0;
   let deliveryCancel = 0;
   document.querySelectorAll('[data-del-cancelamount]').forEach(inp => deliveryCancel += (parseFloat(inp.value)||0));
 
-  const netCash = cashTotal - cashCancel;
-  document.getElementById('cashActualDisplay').textContent = netCash.toFixed(3) + ' RO';
+  const netCash = cashTotal;   // the cash cancellation is information only — it is not deducted
+  document.getElementById('cashTotalBelowDisplay').textContent = cashTotal.toFixed(3) + ' RO';
+  document.getElementById('cashActualDisplay').textContent = (cashTotal - cashCancel).toFixed(3) + ' RO';
   const netDelivery = deliveryTotal - deliveryCancel;
   document.getElementById('deliveryActualDisplay').textContent = netDelivery.toFixed(3) + ' RO';
-  const actual = netCash + visaTotal + netDelivery - discount;
+  const actual = netCash + visaTotal + netDelivery;
   document.getElementById('actualDisplay').value = actual.toFixed(3);
 
-  // Daily Sales variance: cash + visa (after discount), delivery excluded, vs Foodics.
-  const salesActual = netCash + visaTotal - discount;
+  // Daily Sales variance: cash + visa (cancellations and discount do not change it), delivery excluded, vs Foodics.
+  const salesActual = cashTotal + visaTotal;
   const expected = parseFloat(document.getElementById('expected').value) || 0;
   const variance = salesActual - expected;
   document.getElementById('varianceDisplay').textContent = variance.toFixed(3);

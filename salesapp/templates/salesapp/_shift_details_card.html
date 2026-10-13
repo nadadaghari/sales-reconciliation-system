@@ -7,7 +7,7 @@
     <div><label>Shift</label><input value="Shift {{ selected_entry.shift }}" disabled></div>
   </div>
   <div class="grid grid-2" style="margin-top:12px;">
-    <div><label>Submitted by</label><input value="{{ selected_entry.accountant|default:'-' }}" disabled></div>
+    <div><label>Submitted by</label><input value="{{ selected_entry.accountant|default:'-' }}{% if selected_entry.submitted_punch %} · {{ selected_entry.submitted_punch }}{% endif %}" disabled></div>
     <div><label>Submitted At</label><input value="{{ selected_entry.created_at }}" disabled></div>
   </div>
 </div>

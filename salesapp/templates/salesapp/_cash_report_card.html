@@ -36,17 +36,25 @@
     {% endif %}
   </div>
 
-  <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span>{{ selected_entry.cash_total|add:selected_entry.cash_cancel_amount|floatformat:3 }} RO</span></div>
+  <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span>{{ selected_entry.cash_total|floatformat:3 }} RO</span></div>
   {% if selected_entry.cash_cancel_amount %}
   <div style="overflow-x:auto; margin-top:10px;">
   <table>
-    <thead><tr><th>Cash Cancelled Order{% if shift_changes.cash_cancel_amount %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</th><th>Receipt</th></tr></thead>
+    <thead><tr><th>Order No.</th><th>Cash Cancelled Order{% if shift_changes.cash_cancel_amount %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</th><th>Receipt</th></tr></thead>
     <tbody><tr>
+      <td>{{ selected_entry.cash_cancel_order|default:"—" }}</td>
       <td>{{ selected_entry.cash_cancel_amount }} RO</td>
       <td>{% if selected_entry.cash_cancel_attachment %}<a href="{{ selected_entry.cash_cancel_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
     </tr></tbody>
   </table>
   </div>
+  <div class="total-strip" style="margin-top:6px;"><span>Cash Total</span><span>{{ selected_entry.cash_total|floatformat:3 }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px;"><span>Cash Total with Cancellation (information only)</span><span>{{ selected_entry.cash_with_cancel|floatformat:3 }} RO</span></div>
   {% endif %}
-  <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+  {% if selected_entry.cash_from_collector %}
+  <div class="total-strip" style="margin-top:6px;"><span>Waiter's cash</span><span>{{ selected_entry.cash_total }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px; background:#E1F5EE;"><span>Final Cash Amount (the collector's count)</span><span>{{ selected_entry.final_cash_total|floatformat:3 }} RO</span></div>
+  {% else %}
+  <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount</span><span>{{ selected_entry.cash_total }} RO</span></div>
+  {% endif %}
 </div>

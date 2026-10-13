@@ -1,0 +1,42 @@
+{# Discount rows: Amount, with a + to add more. Include with d_entry=<the entry> (or d_entry=None for a new one). #}
+<div id="discountRows"></div>
+<button type="button" class="btn secondary small" id="addDiscountRow" style="margin-top:6px;">+ Add discount</button>
+<div class="total-strip" style="margin-top:10px;"><span>Total Discount</span><span id="discountTotalDisplay">0.000 RO</span></div>
+<input type="hidden" name="staff_discount" id="discountTotalInput" value="0">
+{% if d_entry %}{{ d_entry.discount_rows|json_script:"discountInit" }}{% endif %}
+<script>
+(function(){
+  const box = document.getElementById('discountRows');
+  let init = [];
+  try { const el = document.getElementById('discountInit'); if (el) init = JSON.parse(el.textContent) || []; } catch(e) {}
+  const val = s => (window.num ? window.num(s) : (parseFloat(String(s).replace(/,/g, '')) || 0));
+  function total(){
+    let t = 0;
+    box.querySelectorAll('[name="discount_row_amount[]"]').forEach(i => t += val(i.value));
+    document.getElementById('discountTotalDisplay').textContent = t.toFixed(3) + ' RO';
+    document.getElementById('discountTotalInput').value = t.toFixed(3);
+    if (window.calcAll) window.calcAll();
+  }
+  function addRow(order, amount){
+    const row = document.createElement('div');
+    row.className = 'visa-row';   // same look as the Visa machine rows
+    row.style.gridTemplateColumns = 'minmax(110px, 200px) auto';
+    row.style.justifyContent = 'start';
+    row.innerHTML =
+      '<div><label>Amount</label><input type="text" inputmode="decimal" autocomplete="off" data-num="dec" name="discount_row_amount[]"></div>' +
+      '<button type="button" class="btn secondary small" title="Remove">Remove</button>';
+    row.querySelector('[name="discount_row_amount[]"]').value = (amount === undefined || amount === null || amount === '') ? '0' : amount;
+    row.querySelector('[name="discount_row_amount[]"]').addEventListener('input', total);
+    row.querySelector('button').addEventListener('click', () => {
+      if (box.children.length > 1) { row.remove(); } else {
+        row.querySelector('[name="discount_row_amount[]"]').value = '0';
+      }
+      total();
+    });
+    box.appendChild(row);
+    total();
+  }
+  document.getElementById('addDiscountRow').addEventListener('click', () => addRow('', '0'));
+  if (init.length) { init.forEach(r => addRow(r.order_no, r.amount)); } else { addRow('', '0'); }
+})();
+</script>

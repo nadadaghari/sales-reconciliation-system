@@ -1,6 +1,7 @@
 {% extends "salesapp/base.html" %}
 {% load app_filters %}
 {% block content %}
+<style>input[readonly]{background:#F3F1EA !important; color:#6F6A5C; cursor:not-allowed;}</style>
 
 <div class="card">
   <h3>All Entries</h3>
@@ -19,7 +20,7 @@
       </div>
       <div>
         <label>Filter by Branch</label>
-        <input name="branch_filter" value="{{ branch_filter }}" placeholder="e.g. Kucu Ibri">
+        {% include "salesapp/_branch_picker.html" %}
       </div>
       <div>
         <label>Date From</label>
@@ -34,7 +35,11 @@
         <input name="search_ref" value="{{ search_ref }}" placeholder="e.g. K-DH001-0002">
       </div>
     </div>
+    <div style="margin:14px 0;">
+      {% include "salesapp/_stage_filter.html" %}
+    </div>
     <button type="submit" class="btn small">Apply</button>
+    {% if selected_stages or branch_selected_count or shift_filter or date_from or date_to or search_ref %}<a href="{% url 'dashboard' %}" class="btn secondary small" style="text-decoration:none; display:inline-block; margin-left:8px;">Clear filters</a>{% endif %}
   </form>
 
   {% for group in branch_groups %}
@@ -69,7 +74,7 @@
           <td><strong>{{ row.entry.reference_id }}</strong></td>
           <td>{{ row.entry.date }}</td>
           <td>Shift {{ row.entry.shift }}</td>
-          <td>{{ row.entry.accountant|default:"-" }}</td>
+          <td>{% include "salesapp/_submitter.html" with name=row.entry.accountant punch=row.entry.submitted_punch %}</td>
           <td>{{ row.entry.sales_actual }} RO</td>
           <td>{% if row.entry.expected_foodics %}{{ row.entry.expected_foodics }} RO{% else %}-{% endif %}</td>
           <td>{% if row.entry.expected_foodics %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.variance }} RO</span>{% else %}-{% endif %}</td>
@@ -90,7 +95,7 @@
             {% endif %}
           </td>
           <td>
-            <a href="?entry_id={{ row.entry.id }}&{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="icon-btn edit" title="Select">
+            <a href="?entry_id={{ row.entry.id }}&{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{{ branch_qs|safe }}{{ stage_qs|safe }}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="icon-btn edit" title="Select">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </a>
           </td>
@@ -199,15 +204,15 @@ function toggleAuditGroup(id){
 {% if selected_entry %}
 <div class="modal-overlay">
 <div class="modal-box">
-<a href="{% url 'dashboard' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="modal-close" title="Close">&times;</a>
+<a href="{% url 'dashboard' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{{ branch_qs|safe }}{{ stage_qs|safe }}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="modal-close" title="Close">&times;</a>
 <div class="modal-inner">
-<a href="{% url 'dashboard' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="btn secondary small" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; margin-bottom:16px;">
+<a href="{% url 'dashboard' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{{ branch_qs|safe }}{{ stage_qs|safe }}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="btn secondary small" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; margin-bottom:16px;">
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
   Back
 </a>
 
 <div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px 14px; background:#F7F5EE; border:1px solid #E7E4DB; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#6F6A5C;">
-  <span>Submitted by <b style="color:#1F3B4D; font-size:15px;">{{ selected_entry.accountant|default:"—" }}</b></span>
+  <span>Submitted by <b style="color:#1F3B4D; font-size:15px;">{{ selected_entry.accountant|default:"—" }}</b>{% if selected_entry.submitted_punch %}<span style="display:inline-block; margin-left:6px; padding:1px 8px; border-radius:20px; background:#EEF1F4; color:#1F3B4D; font-size:11px; font-weight:700; letter-spacing:.3px; vertical-align:middle; font-size:12px;">{{ selected_entry.submitted_punch }}</span>{% endif %}</span>
   <span>·</span><span>{{ selected_entry.branch.name }}</span>
   <span>·</span><span>{{ selected_entry.date|date:"d M Y" }}</span>
   <span>·</span><span>Shift {{ selected_entry.shift }}</span>
@@ -248,7 +253,7 @@ function toggleAuditGroup(id){
     </div>
   </div>
   <div class="grid grid-2" style="margin-top:12px;">
-    <div><label>Submitted by</label><input name="accountant" value="{{ selected_entry.accountant }}"></div>
+    <div><label>Submitted by{% if selected_entry.submitted_punch %}<span style="display:inline-block; margin-left:6px; padding:1px 8px; border-radius:20px; background:#EEF1F4; color:#1F3B4D; font-size:11px; font-weight:700; letter-spacing:.3px; vertical-align:middle;">{{ selected_entry.submitted_punch }}</span>{% endif %}</label><input name="accountant" value="{{ selected_entry.accountant }}"></div>
     <div><label>Submitted At</label><input value="{{ selected_entry.created_at }}" disabled></div>
   </div>
 </div>
@@ -259,9 +264,10 @@ function toggleAuditGroup(id){
 <div id="tabCashA" style="display:none;">
   <div class="card">
     <h3>Cash Report</h3>
+    {% if request.user.profile.role == 'audit' %}<div style="background:#FAEEDA; color:#854F0B; font-size:12.5px; font-weight:600; padding:8px 12px; border-radius:8px; margin:0 0 12px;">🔒 The waiter's cash numbers are view only. Audit can correct the collector's numbers in the Cash tab, after the collector has saved them.</div>{% endif %}
     <div style="margin-bottom:14px;">
       <label style="display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:0;">
-        <input type="checkbox" id="hasAedCheckbox" style="width:auto;" onchange="toggleAedSection()">
+        <input type="checkbox" id="hasAedCheckbox" style="width:auto;" onchange="toggleAedSection()" {% if request.user.profile.role == 'audit' %}disabled{% endif %}>
         This shift also includes AED cash
       </label>
       <input type="hidden" value="{{ selected_entry.aed_exchange_rate|default:'0.1000' }}" name="aed_exchange_rate" id="aedRate" class="calc-input">
@@ -273,7 +279,7 @@ function toggleAuditGroup(id){
         {% for d in denoms %}
         <div class="denom-row">
           <div class="denom-label">{{ d }}</div>
-          <input type="number" min="0" value="0" style="width:90px;" name="denom_{{ d }}" data-denom="{{ d }}" class="calc-input">
+          <input type="number" min="0" value="0" style="width:90px;" name="denom_{{ d }}" data-denom="{{ d }}" class="calc-input" {% if request.user.profile.role == 'audit' %}readonly{% endif %}>
           <div class="denom-amount" id="denomAmt_{{ d }}" style="width:90px; color:#8A8578; font-size:13px;">0.000</div>
           <div style="width:58px; flex:none;">{% with key="denom_"|add:d %}{% if shift_changes|get_item:key %}<span style="display:inline-block; font-size:9px; color:#fff; background:#1F8A5C; font-weight:700; padding:1px 5px; border-radius:4px;">Audited</span>{% endif %}{% endwith %}</div>
         </div>
@@ -285,7 +291,7 @@ function toggleAuditGroup(id){
         {% for d in aed_denoms %}
         <div class="denom-row">
           <div class="denom-label">{{ d }}</div>
-          <input type="number" min="0" value="0" style="width:90px;" name="denom_aed_{{ d }}" data-denom-aed="{{ d }}" class="calc-input">
+          <input type="number" min="0" value="0" style="width:90px;" name="denom_aed_{{ d }}" data-denom-aed="{{ d }}" class="calc-input" {% if request.user.profile.role == 'audit' %}readonly{% endif %}>
           <div class="denom-amount" id="denomAedAmt_{{ d }}" style="flex:1; min-width:0; color:#8A8578; font-size:13px;">0.000</div>
           <div style="width:58px; flex:none;">{% with key="denom_aed_"|add:d %}{% if shift_changes|get_item:key %}<span style="display:inline-block; font-size:9px; color:#fff; background:#1F8A5C; font-weight:700; padding:1px 5px; border-radius:4px;">Audited</span>{% endif %}{% endwith %}</div>
         </div>
@@ -294,36 +300,37 @@ function toggleAuditGroup(id){
       </div>
     </div>
     <div class="total-strip" style="margin-top:16px;"><span>Combined Total Cash (OMR + AED)</span><span id="cashTotalDisplay">0.000</span></div>
-    <div class="total-strip" style="margin-top:6px;"><span>Cash Actual Amount (after cancellation)</span><span id="cashActualDisplay">0.000 RO</span></div>
+    {% if selected_entry.cash_from_collector %}<div class="total-strip" style="margin-top:6px; background:#E1F5EE;"><span>Final Cash Amount (the collector's count — used in Sales Actual)</span><span>{{ selected_entry.final_cash_total|floatformat:3 }} RO</span></div>{% endif %}
 
     <div class="grid grid-2" style="margin-top:14px;">
       <div>
-        <label>Petty Cash Amount{% if shift_changes.petty_cash %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</label><input name="petty_cash" type="number" step="0.001" value="{{ selected_entry.petty_cash }}">
+        <label>Petty Cash Amount{% if shift_changes.petty_cash %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</label><input name="petty_cash" type="number" step="0.001" value="{{ selected_entry.petty_cash }}" {% if request.user.profile.role == 'audit' %}readonly{% endif %}>
       </div>
     </div>
     <div class="grid grid-2" style="margin-top:14px;">
+      <div><label>Cash Cancelled Order — Order Number</label><input name="cash_cancel_order" type="text" maxlength="200" value="{{ selected_entry.cash_cancel_order }}" {% if request.user.profile.role == 'audit' %}readonly{% endif %}></div>
+    </div>
+    <div class="grid grid-2" style="margin-top:14px;">
       <div>
-        <label>Cash Cancelled Order — Amount{% if shift_changes.cash_cancel_amount %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</label><input name="cash_cancel_amount" type="number" step="0.001" value="{{ selected_entry.cash_cancel_amount }}" class="calc-input">
+        <label>Cash Cancelled Order — Amount{% if shift_changes.cash_cancel_amount %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</label><input name="cash_cancel_amount" type="number" step="0.001" value="{{ selected_entry.cash_cancel_amount }}" class="calc-input" {% if request.user.profile.role == 'audit' %}readonly{% endif %}>
       </div>
       <div><label>Cash Cancelled Order — Receipt</label>
         {% if selected_entry.cash_cancel_attachment %}<div style="margin-bottom:4px;"><a href="{{ selected_entry.cash_cancel_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
-        <input type="file" name="cash_cancel_attachment" accept="image/*,.pdf">
+        <input type="file" name="cash_cancel_attachment" accept="image/*,.pdf" {% if request.user.profile.role == 'audit' %}disabled{% endif %}>
       </div>
     </div>
+    <div class="total-strip" style="margin-top:12px;"><span>Cash Total</span><span id="cashTotalBelowDisplay">0.000 RO</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Cash Total with Cancellation (information only)</span><span id="cashActualDisplay">0.000 RO</span></div>
   </div>
 </div>
 
 <div id="tabSalesA_2">
   <div class="card">
-    <h3>Discount</h3>
-    <div class="grid grid-2">
-      <div>
-        <label>Staff Discount / Coupons{% if shift_changes.staff_discount %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</label><input name="staff_discount" type="number" step="0.001" value="{{ selected_entry.staff_discount }}" class="calc-input">
-      </div>
-      <div><label>Discount Receipt (photo/PDF)</label>
-        {% if selected_entry.staff_discount_attachment %}<div style="margin-bottom:4px;"><a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
-        <input type="file" name="discount_attachment" accept="image/*,.pdf">
-      </div>
+    <h3>Discount{% if shift_changes.staff_discount %}<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>{% endif %}</h3>
+    {% include "salesapp/_discount_rows.html" with d_entry=selected_entry %}
+    <div style="margin-top:12px;"><label>Discount Receipt (photo/PDF)</label>
+      {% if selected_entry.staff_discount_attachment %}<div style="margin-bottom:4px;"><a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
+      <input type="file" name="discount_attachment" accept="image/*,.pdf">
     </div>
   </div>
   <div class="card">
@@ -403,6 +410,7 @@ function toggleAuditGroup(id){
 const DENOMS = {{ denoms|safe }};
 const AED_DENOMS = {{ aed_denoms|safe }};
 const THRESHOLD = {{ variance_threshold|stringformat:"f" }};
+const COLLECTOR_CASH = {% if selected_entry.cash_from_collector %}{{ selected_entry.final_cash_total|stringformat:"f" }}{% else %}null{% endif %};   // once the collector has saved, his count is the cash used in the totals
 const VISA_AUDITED = {% if shift_changes.visa_total %}true{% else %}false{% endif %};
 const VISA_AUDITED_BADGE = '<span style="display:inline-block; background:#1F8A5C; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; margin-left:6px; vertical-align:middle;">Audited</span>';
 let visaCount = 0;
@@ -457,12 +465,12 @@ window.calcAll = function(){
   document.querySelectorAll('[data-del-cancelamount]').forEach(inp => deliveryCancel += (parseFloat(inp.value)||0));
   document.getElementById('deliveryActualDisplay').textContent = (deliveryTotal - deliveryCancel).toFixed(3) + ' RO';
 
-  const discount = parseFloat(document.querySelector('[name="staff_discount"]').value) || 0;
   const cashCancel = parseFloat(document.querySelector('[name="cash_cancel_amount"]').value) || 0;
 
-  const netCash = cashTotal - cashCancel;
-  document.getElementById('cashActualDisplay').textContent = netCash.toFixed(3) + ' RO';
-  const salesActual = netCash + visaTotal - discount;
+  const netCash = cashTotal;   // the cash cancellation is information only — it is not deducted
+  document.getElementById('cashTotalBelowDisplay').textContent = cashTotal.toFixed(3) + ' RO';
+  document.getElementById('cashActualDisplay').textContent = (cashTotal - cashCancel).toFixed(3) + ' RO';
+  const salesActual = (COLLECTOR_CASH !== null ? COLLECTOR_CASH : cashTotal) + visaTotal;   // cancellations and discount are for confirmation only
   document.getElementById('salesActualDisplay').value = salesActual.toFixed(3);
 
   const foodics = parseFloat(document.getElementById('foodicsInput').value) || 0;
@@ -541,7 +549,7 @@ calcAll();
   <h3>Cash Reconciliation</h3>
   {% if selected_handover %}
   <div class="grid grid-3">
-    <div class="total-strip"><span>Waiter cash (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+    <div class="total-strip"><span>Waiter cash</span><span>{{ selected_entry.cash_total }} RO</span></div>
     <div class="total-strip"><span>Collector cash (OMR + AED)</span><span>{{ selected_handover.cash_total }} RO</span></div>
     <div class="total-strip {% if selected_has_difference %}flag{% endif %}"><span>Difference</span><span>{{ selected_handover.diff_from_waiter }} RO</span></div>
   </div>
@@ -550,13 +558,16 @@ calcAll();
     Reconciled by {{ selected_handover.reconciled_by.username|default:"-" }} on {{ selected_handover.reconciled_at|date:"Y-m-d H:i" }}
   </div>
   {% else %}
-  <form method="post" action="{% url 'cash_reconcile_action' %}" style="margin-top:14px;">
+  <form method="post" action="{% url 'cash_reconcile_action' %}" style="margin-top:16px; border:2px solid #D4A843; border-radius:12px; padding:14px 16px; background:#FFFBF0;">
     {% csrf_token %}
-    <input type="hidden" name="action" value="approve_one">
     <input type="hidden" name="handover_id" value="{{ selected_handover.id }}">
-    <label>Note {% if selected_has_difference %}(required — explain the difference){% else %}(optional){% endif %}</label>
-    <textarea name="note" rows="2" style="max-width:100%;" {% if selected_has_difference %}required{% endif %}>{{ selected_handover.reconcile_note }}</textarea>
-    <button type="submit" class="btn" style="margin-top:12px;">Approve Cash Reconciliation</button>
+    <div style="font-size:13px; font-weight:800; color:#854F0B; letter-spacing:.4px; text-transform:uppercase;">Audit Note</div>
+    <div style="font-size:12px; color:#8A8578; margin:2px 0 8px;">Written by Audit only. The waiter's and the collector's cash cannot be changed here.</div>
+    <textarea name="note" rows="3" style="max-width:100%;" placeholder="{% if selected_has_difference %}Required to approve — explain the difference{% else %}Optional{% endif %}" {% if selected_has_difference %}data-needs-note="1"{% endif %}>{{ selected_handover.reconcile_note }}</textarea>
+    <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:8px;">
+      <button type="submit" name="action" value="save_note" class="btn secondary" formnovalidate>Save Audit Note</button>
+      <button type="submit" name="action" value="approve_one" class="btn" {% if selected_has_difference %}onclick="var t=this.form.note; if(!t.value.trim()){ t.focus(); alert('Please write an Audit note explaining the difference before approving.'); return false; }"{% endif %}>Approve Cash Reconciliation</button>
+    </div>
   </form>
   {% endif %}
   {% else %}
@@ -565,7 +576,7 @@ calcAll();
 </div>
 
 {% if selected_handover %}
-<h3 style="margin:24px 0 6px; color:#8A8578; font-size:13px; letter-spacing:0.5px;">COLLECTOR'S COUNT — AUDIT CAN CORRECT NUMBERS HERE</h3>
+<h3 style="margin:24px 0 6px; color:#8A8578; font-size:13px; letter-spacing:0.5px;">COLLECTOR'S COUNT — AUDIT CAN CORRECT THE COLLECTOR'S NUMBERS HERE (THE WAITER'S NUMBERS ARE LOCKED)</h3>
 <form method="post" action="{% url 'collector' %}" id="cashCorrectForm">
   {% csrf_token %}
   <input type="hidden" name="shift_entry_id" value="{{ selected_entry.id }}">
@@ -601,8 +612,7 @@ calcAll();
       </div>
     </div>
     <div class="total-strip" style="margin-top:16px;"><span>Collector Cash Total (OMR + AED)</span><span id="cCashTotalDisplay">0.000</span></div>
-    <div style="margin-top:12px; color:#8A8578; font-size:13px;">Counted by {{ selected_handover.collector_name|default:"—" }} · {{ selected_handover.recounted_at|date:"Y-m-d H:i" }}</div>
-    <div style="margin-top:12px;"><label>Note</label><textarea name="notes" rows="2" style="max-width:100%;">{{ selected_handover.notes }}</textarea></div>
+    <div style="margin-top:12px; color:#8A8578; font-size:13px;">Counted by {{ selected_handover.collector_name|default:"—" }} · {{ selected_handover.recounted_at|date:"Y-m-d H:i" }} · {% if selected_handover.proof_attachment %}<a href="{{ selected_handover.proof_attachment.url }}" target="_blank" style="color:#3B6FE0;">📎 Cash proof</a>{% else %}<span style="color:#C0392B;">No cash proof uploaded</span>{% endif %}</div>
     <button type="submit" class="btn" style="margin-top:12px;">Save Correction</button>
   </div>
 </form>

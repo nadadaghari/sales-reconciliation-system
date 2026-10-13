@@ -1,0 +1,18 @@
+{# Stage filter pills (checkboxes, several can be picked). Needs stage_options = [(value, label, count)] and selected_stages. #}
+<style>
+  .stage-pills { display:flex; flex-wrap:wrap; gap:8px; }
+  .stage-pill { display:inline-block; position:relative; margin:0; cursor:pointer; }
+  .stage-pill input { position:absolute; opacity:0; width:0; height:0; margin:0; }
+  .stage-pill span { display:inline-flex; align-items:center; gap:8px; padding:7px 14px; border:1.5px solid #D9D5C8; border-radius:20px; background:#fff; color:#3D3A31; font-size:13px; font-weight:600; white-space:nowrap; transition:background .12s, border-color .12s; }
+  .stage-pill span b { font-size:11px; background:#F0EEE7; color:#6F6A5C; border-radius:20px; padding:1px 8px; }
+  .stage-pill:hover span { border-color:#1F3B4D; }
+  .stage-pill input:checked + span { background:#1F3B4D; border-color:#1F3B4D; color:#fff; }
+  .stage-pill input:checked + span b { background:rgba(255,255,255,.2); color:#fff; }
+  .stage-pill input:focus-visible + span { outline:2px solid #D4A843; outline-offset:2px; }
+</style>
+<label>Stage <span style="font-weight:400; color:#9A9585;">(pick one or more — none picked shows everything)</span></label>
+<div class="stage-pills">
+  {% for value, label, count in stage_options %}
+  <label class="stage-pill"><input type="checkbox" name="stage" value="{{ value }}" {% if value in selected_stages %}checked{% endif %}><span>{{ label }} <b>{{ count }}</b></span></label>
+  {% endfor %}
+</div>

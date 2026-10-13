@@ -35,8 +35,8 @@
           <td><strong>{{ e.reference_id }}</strong></td>
           <td>{{ e.date }}</td>
           <td>Shift {{ e.shift }}</td>
-          <td>{{ e.accountant|default:"-" }}</td>
-          {% if user.profile.role == 'collector' %}<td>{{ e.cash_total|floatformat:3 }} RO</td>{% else %}<td>{{ e.actual_total|floatformat:3 }} RO</td>
+          <td>{% include "salesapp/_submitter.html" with name=e.accountant punch=e.submitted_punch %}</td>
+          {% if user.profile.role == 'collector' %}<td>{{ e.cash_total|floatformat:3 }} RO</td>{% else %}<td>{{ e.sales_actual|floatformat:3 }} RO</td>
           <td style="{% if e.expected_foodics and e.variance != 0 %}color:#B94A3F; font-weight:700;{% endif %}">{% if e.expected_foodics %}{{ e.variance|floatformat:3 }} RO{% else %}-{% endif %}</td>{% endif %}
           <td>
             <form method="post" action="{% url 'archive_entry' e.id %}" style="display:inline;">

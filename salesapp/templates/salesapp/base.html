@@ -24,6 +24,7 @@
   .role-collector { background:#E6F1FB; color:#185FA5; }
   .role-audit { background:#EEEDFE; color:#3C3489; }
   .role-manager { background:#FDF1E3; color:#8A5410; }
+  .role-sales_manager { background:#E4F1EA; color:#1F5F46; }
 
   .layout { display:flex; min-height:calc(100vh - 60px); align-items:stretch; }
   .sidebar { width:230px; background:#211D18; color:#fff; display:flex; flex-direction:column; padding:16px 0; flex-shrink:0; transition:width 0.2s ease; }
@@ -153,7 +154,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="#D4A843" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6"/></svg>
     </div>
     <div>
-      <div class="user-name">{{ user.profile.head_cashier_name|default:user.username }}</div>
+      <div class="user-name">{{ user.profile.head_cashier_name|default:user.username }}{% if user.profile.role == 'waiter' and user.profile.punch_id %}<span style="display:inline-block; margin-left:6px; padding:1px 8px; border-radius:20px; background:#EEF1F4; color:#1F3B4D; font-size:11px; font-weight:700; letter-spacing:.3px; vertical-align:middle; background:rgba(255,255,255,0.16); color:#fff;">{{ user.profile.punch_id }}</span>{% endif %}</div>
     </div>
     <span class="role-badge role-{{ user.profile.role }}">{{ user.profile.get_role_display }}</span>
   </div>
@@ -175,10 +176,10 @@
         History
       </a>
     {% endif %}
-    {% if user.profile.role == 'collector' or user.profile.is_full_access %}
+    {% if user.profile.role == 'collector' or user.profile.role == 'sales_manager' or user.profile.is_full_access %}
       <a href="{% url 'collector' %}" class="{% if active_tab == 'collector' %}active{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
-        Collector Handover
+        {% if user.profile.role == 'sales_manager' %}Collector (View){% else %}Collector Handover{% endif %}
       </a>
     {% endif %}
     {% if user.profile.role == 'audit' or user.profile.role == 'manager' or user.profile.is_full_access %}
@@ -187,7 +188,7 @@
         {% if user.profile.role == 'manager' %}Review{% else %}Audit{% endif %}
       </a>
     {% endif %}
-    {% if user.profile.role == 'audit' or user.profile.role == 'manager' or user.profile.is_full_access %}
+    {% if user.profile.role == 'audit' or user.profile.role == 'manager' or user.profile.role == 'sales_manager' or user.profile.is_full_access %}
       <a href="{% url 'daily_sales_report' %}" class="{% if active_tab == 'daily_report' %}active{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="8 15 11 12 13 14 16 10"/></svg>
         Daily Sales Report
@@ -201,6 +202,12 @@
     {% endif %}
     <div class="spacer"></div>
     <div class="bottom-links">
+      {% if user.profile.role == 'audit' or user.profile.role == 'manager' %}
+        <a href="{% url 'audit_settings' %}" class="{% if active_tab == 'audit_settings' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+          Settings
+        </a>
+      {% endif %}
       {% if user.profile.is_full_access %}
         <a href="{% url 'create_user' %}" class="{% if active_tab == 'users' or active_tab == 'branches' %}active{% endif %}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -209,6 +216,10 @@
         <a href="{% url 'audit_log' %}" class="{% if active_tab == 'audit_log' %}active{% endif %}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c2.5 0 4.75 1.02 6.36 2.64"/><path d="M21 3v6h-6"/></svg>
           Audit Log
+        </a>
+        <a href="{% url 'audit_settings' %}" class="{% if active_tab == 'audit_settings' %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+          Cut-off Times
         </a>
       {% endif %}
       <form method="post" action="{% url 'logout' %}" class="logout-form">

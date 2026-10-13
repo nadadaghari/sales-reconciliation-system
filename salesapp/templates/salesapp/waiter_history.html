@@ -40,11 +40,11 @@
         <td><strong>{{ row.entry.reference_id }}</strong></td>
         <td>{{ row.entry.date }}</td>
         <td>Shift {{ row.entry.shift }}</td>
-        <td>{{ row.entry.accountant|default:"-" }}</td>
+        <td>{% include "salesapp/_submitter.html" with name=row.entry.accountant punch=row.entry.submitted_punch %}</td>
         <td>{{ row.entry.cash_total|floatformat:3 }}</td>
         <td>{{ row.entry.visa_total|floatformat:3 }}</td>
         <td>{{ row.entry.delivery_total|floatformat:3 }}</td>
-        <td>{{ row.entry.actual_total|floatformat:3 }}</td>
+        <td>{{ row.entry.sales_actual|floatformat:3 }}</td>
         <td>
           {% if row.sales_status == 'reviewed' %}
             <span class="badge ok">Reviewed</span>

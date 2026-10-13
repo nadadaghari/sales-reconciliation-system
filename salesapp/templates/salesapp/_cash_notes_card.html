@@ -1,11 +1,12 @@
 {# Cash stage: the collector's note and Audit's Cash Reconciliation note. #}
-{% if selected_handover.notes or selected_handover.reconcile_note %}
+{% if selected_handover.notes or selected_handover.proof_attachment or selected_handover.reconcile_note %}
 <div class="card" style="background:#FAEEDA;">
   <h3 style="color:#854F0B;">Cash Notes</h3>
   <div class="grid grid-2">
     <div>
       <label style="color:#854F0B; font-weight:700;">Collector</label>
       <div style="color:#1F3B4D; font-size:14px;">{{ selected_handover.notes|default:"—" }}</div>
+      {% if selected_handover.proof_attachment %}<div style="margin-top:6px;"><a href="{{ selected_handover.proof_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 Attachment</a></div>{% endif %}
     </div>
     <div>
       <label style="color:#854F0B; font-weight:700;">Audit</label>

@@ -1,0 +1,256 @@
+{% extends "salesapp/base.html" %}
+{% block content %}
+<style>
+  .co-brand { background:#F7F5EE; border-radius:10px; padding:9px 12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:14px 0 4px; }
+  .co-brand b { color:#1F3B4D; font-size:14px; }
+  .co-brand .co-n { font-size:12px; color:#8A8578; }
+  .co-brand .co-apply { margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:#6F6A5C; }
+  .co-row { display:grid; grid-template-columns:minmax(170px,1.2fr) 118px 118px minmax(190px,1.1fr) minmax(120px,.7fr); gap:12px; align-items:center; padding:8px 12px; border-bottom:1px solid #F0EEE7; font-size:13px; }
+  .co-row.head { font-size:11px; font-weight:700; color:#8A8578; letter-spacing:.4px; text-transform:uppercase; border-bottom:2px solid #E3DFD3; }
+  .co-row input.co-t, .co-apply input.co-t { width:104px; padding:7px 10px; font-size:14px; text-align:center; font-variant-numeric:tabular-nums; letter-spacing:.5px; }
+  .co-row.changed input.co-t { border-color:#1F8A5C; background:#F3FAF6; }
+  .co-row input.co-t.bad, .co-apply input.co-t.bad { border-color:#B94A3F; background:#FBE9E6; }
+  .co-row.invalid .co-win { color:#B94A3F; }
+  .co-row.invalid .co-win { color:#B94A3F; }
+  .co-win { color:#1F3B4D; font-weight:600; }
+  .co-today { color:#8A8578; }
+  .co-small { font-size:11px; color:#9A9585; }
+  @media (max-width:760px) { .co-row { grid-template-columns:1fr 1fr; } .co-row.head { display:none; } }
+</style>
+
+<div class="card">
+  <h3>Branch Cut-off Times</h3>
+  <p style="color:#6F6A5C; font-size:13px; margin:0 0 6px; line-height:1.6;">
+    Type each branch's <b>opening time</b> and <b>closing time</b> yourself, with AM or PM (for example <b>10:00 AM</b> and <b>3:00 AM</b>).
+    The closing time can be on the next calendar day.
+  </p>
+  <ul style="color:#6F6A5C; font-size:13px; margin:6px 0 0; padding-left:20px; line-height:1.7;">
+    <li><b>While the shop is open</b>, a report belongs to the day that is running. A report at 2 AM still counts for the day that opened at 10:00 AM the day before.</li>
+    <li><b>After the shop closes and before it opens again</b>, the new day starts: the report counts for the <b>next day</b>. The waiter first gets a <b>"late submission — are you sure?"</b> message, and after OK the report shows <b>Late submission</b> on every dashboard.</li>
+    <li><b>12:00 AM → 11:59 PM</b> means an ordinary calendar day (never closed, never late). Waiters see their branch's opening and closing time on their page.</li>
+  </ul>
+  <p style="color:#9A9585; font-size:12px; margin:6px 0 0;">Type it as <b>10 am</b>, <b>10:30 pm</b>, <b>3am</b> — or in 24-hour style (<b>22:30</b>). A number with no AM/PM is read as 24-hour. It is tidied up when you leave the box.</p>
+  {% if is_viewer %}<div style="margin-top:10px; background:#FDF1E3; color:#8A5410; border:1px solid #F0D9B5; border-radius:8px; padding:8px 12px; font-size:13px; font-weight:600;">View only — changes are disabled for your role.</div>{% endif %}
+</div>
+
+<div class="card" id="tryCard">
+  <h3>Test it</h3>
+  <p style="color:#6F6A5C; font-size:13px; margin:0 0 12px;">Pick a branch and a day and time, and see which date a report submitted then would get. It uses the opening and closing times <b>typed in the table below</b> — even before you save — so you can try a change first.</p>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit, minmax(190px, 1fr));">
+    <div><label>Branch</label>
+      <select id="tryBranch">
+        {% for g in brand_groups %}{% for b in g.branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}{% endfor %}
+      </select>
+    </div>
+    <div><label>Day</label><input type="date" id="tryDate" value="{{ now|date:'Y-m-d' }}"></div>
+    <div><label>Time</label><input type="text" id="tryTime" class="co-t" style="width:100%;" value="{{ now|date:'g:i A' }}" placeholder="6:00 AM" autocomplete="off"></div>
+  </div>
+  <div id="tryResult" style="margin-top:14px; border-radius:12px; padding:14px 16px; background:#F7F5EE; font-size:13px; color:#3D3A31; line-height:1.7;"></div>
+  <details style="margin-top:10px;">
+    <summary style="cursor:pointer; font-size:13px; color:#1F3B4D; font-weight:600;">Show the whole day, hour by hour</summary>
+    <div style="overflow-x:auto; margin-top:8px;"><table id="tryTable" style="margin:0; max-width:520px;"></table></div>
+  </details>
+</div>
+
+<form method="post" id="coForm">
+  {% csrf_token %}
+  <div class="card">
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+      <input type="search" id="coSearch" placeholder="Search a branch or brand..." autocomplete="off" style="max-width:320px;">
+      <span id="coChanged" style="font-size:12px; color:#1F8A5C; font-weight:700;"></span>
+      <span style="margin-left:auto; font-size:12px; color:#8A8578;">Now: {{ now|date:"Y-m-d g:i A" }} (Muscat)</span>
+    </div>
+
+    <div class="co-row head"><div>Branch</div><div>Opens</div><div>Closes</div><div>Opening hours</div><div>Current business date</div></div>
+
+    {% for g in brand_groups %}
+    <div class="co-group" data-brand="{{ g.brand|lower }}">
+      <div class="co-brand">
+        <b>{{ g.brand }}</b><span class="co-n">{{ g.branches|length }} branch{{ g.branches|length|pluralize:",es" }}</span>
+        {% if not is_viewer %}
+        <span class="co-apply">Same hours for all {{ g.brand }}:
+          <input type="text" autocomplete="off" class="co-t co-all-start" value="12:00 AM" placeholder="opens" title="Opens">
+          →
+          <input type="text" autocomplete="off" class="co-t co-all-end" value="11:59 PM" placeholder="closes" title="Closes">
+          <button type="button" class="btn secondary small co-all-btn">Apply</button>
+        </span>
+        {% endif %}
+      </div>
+      {% for b in g.branches %}
+      <div class="co-row" data-name="{{ b.name|lower }}" data-orig-start="{{ b.start24 }}" data-orig-end="{{ b.end24 }}">
+        <div>{{ b.name }}{% if b.inactive %} <span class="co-small">(inactive)</span>{% endif %}</div>
+        <div><input type="text" autocomplete="off" class="co-t co-start" name="start_{{ b.id }}" value="{{ b.start }}" placeholder="10:00 AM" maxlength="10" required {% if is_viewer %}disabled{% endif %}></div>
+        <div><input type="text" autocomplete="off" class="co-t co-end" name="end_{{ b.id }}" value="{{ b.end }}" placeholder="3:00 AM" maxlength="10" required {% if is_viewer %}disabled{% endif %}></div>
+        <div class="co-win">{{ b.window }}</div>
+        <div class="co-today">{{ b.today|date:"D d M Y" }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <div id="coNone" style="display:none; text-align:center; color:#8A8578; padding:18px 0; font-size:13px;">No branch matches your search.</div>
+
+    {% if not is_viewer %}
+    <div style="margin-top:16px; display:flex; gap:10px; align-items:center;">
+      <button type="submit" class="btn" id="coSave">Save opening hours</button>
+      <span style="font-size:12px; color:#8A8578;">Only the branches you changed are saved.</span>
+    </div>
+    {% endif %}
+  </div>
+</form>
+
+<script>
+(function(){
+  const form = document.getElementById('coForm');
+  const rows = [...form.querySelectorAll('.co-row[data-name]')];
+  const groups = [...form.querySelectorAll('.co-group')];
+  const pad = n => String(n).padStart(2, '0');
+  const ARABIC = '٠١٢٣٤٥٦٧٨٩', PERSIAN = '۰۱۲۳۴۵۶۷۸۹';
+  const S = r => r.querySelector('.co-start'), E = r => r.querySelector('.co-end');
+  const mins = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+
+  // what somebody typed -> "HH:MM", or null when it is not a time
+  function parse(raw){
+    let s = String(raw || '').replace(/[٠-٩]/g, d => ARABIC.indexOf(d)).replace(/[۰-۹]/g, d => PERSIAN.indexOf(d)).trim().toLowerCase();
+    let suffix = null; const m = s.match(/\s*(am|pm)$/);
+    if (m) { suffix = m[1]; s = s.slice(0, m.index).trim(); }
+    s = s.replace(/[\s.,:٫،]+/g, ':');
+    let h, mi;
+    if (/^\d{1,2}:\d{1,2}$/.test(s)) { [h, mi] = s.split(':').map(Number); }
+    else if (/^\d{3,4}$/.test(s)) { mi = +s.slice(-2); h = +s.slice(0, -2); }
+    else if (/^\d{1,2}$/.test(s)) { h = +s; mi = 0; }
+    else return null;
+    if (suffix) { if (h < 1 || h > 12) return null; h = (h % 12) + (suffix === 'pm' ? 12 : 0); }
+    if (h > 23 || mi > 59) return null;
+    return pad(h) + ':' + pad(mi);
+  }
+  const fmt12 = hhmm => { const [h, m] = hhmm.split(':').map(Number); return (h % 12 || 12) + ':' + pad(m) + ' ' + (h < 12 ? 'AM' : 'PM'); };
+  const windowText = (s, e) => fmt12(s) + ' → ' + fmt12(e) + (mins(e) < mins(s) ? ' (next day)' : '');
+
+  function refresh(){
+    let changed = 0, invalid = 0;
+    rows.forEach(r => {
+      const s = parse(S(r).value), e = parse(E(r).value), win = r.querySelector('.co-win');
+      const typedBoth = S(r).value.trim() !== '' && E(r).value.trim() !== '';
+      let bad = false, msg = '';
+      if (s === null || e === null) { bad = true; msg = typedBoth ? 'Type times like 10 am or 3:30 pm' : 'Enter both times'; }
+      else if (s === e) { bad = true; msg = "Opening and closing can't be the same"; }
+      r.classList.toggle('invalid', bad); if (bad) invalid++;
+      win.textContent = bad ? msg : windowText(s, e);
+      const ch = !bad && (s !== r.dataset.origStart || e !== r.dataset.origEnd);
+      r.classList.toggle('changed', ch); if (ch) changed++;
+    });
+    const note = document.getElementById('coChanged');
+    note.textContent = (changed ? changed + ' unsaved change' + (changed > 1 ? 's' : '') : '') + (invalid ? (changed ? ' · ' : '') + invalid + ' to fix' : '');
+    note.style.color = invalid ? '#B94A3F' : '#1F8A5C';
+    if (typeof tryRefresh === 'function') tryRefresh();     // keep the test card in step with what is typed
+  }
+
+  // tidy a box when you leave it (10 -> 10:00, 1000 -> 10:00, 3 -> 03:00, 10 pm -> 22:00); flag it if it is not a time
+  function tidy(input){
+    const ok = parse(input.value);
+    if (ok !== null) input.value = fmt12(ok);
+    input.classList.toggle('bad', ok === null && input.value.trim() !== '');
+  }
+  rows.forEach(r => [S(r), E(r)].forEach(inp => {
+    inp.addEventListener('input', refresh);
+    inp.addEventListener('blur', () => { tidy(inp); refresh(); });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tidy(inp); refresh(); } });
+  }));
+
+  // "Same hours for all KUCU": fills the opening and closing of every branch in the brand (only those in view while searching)
+  groups.forEach(g => {
+    const btn = g.querySelector('.co-all-btn'); if (!btn) return;
+    const bs = g.querySelector('.co-all-start'), be = g.querySelector('.co-all-end');
+    [bs, be].forEach(inp => {
+      inp.addEventListener('blur', () => tidy(inp));
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tidy(inp); btn.click(); } });
+    });
+    btn.addEventListener('click', () => {
+      const s = parse(bs.value), e = parse(be.value);
+      bs.classList.toggle('bad', s === null); be.classList.toggle('bad', e === null);
+      if (s === null || e === null || s === e) return;
+      bs.value = fmt12(s); be.value = fmt12(e);
+      g.querySelectorAll('.co-row[data-name]').forEach(r => { if (r.style.display !== 'none') { S(r).value = fmt12(s); E(r).value = fmt12(e); S(r).classList.remove('bad'); E(r).classList.remove('bad'); } });
+      refresh();
+    });
+  });
+
+  // search by branch or brand
+  const search = document.getElementById('coSearch');
+  search.addEventListener('input', () => {
+    const term = search.value.trim().toLowerCase(); let any = false;
+    groups.forEach(g => {
+      const brandHit = term && g.dataset.brand.includes(term); let shown = 0;
+      g.querySelectorAll('.co-row[data-name]').forEach(r => {
+        const hit = !term || brandHit || r.dataset.name.includes(term);
+        r.style.display = hit ? '' : 'none'; if (hit) shown++;
+      });
+      g.style.display = shown ? '' : 'none'; if (shown) any = true;
+    });
+    document.getElementById('coNone').style.display = any ? 'none' : 'block';
+  });
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+
+  // never save while a row is wrong; warn before leaving with unsaved changes
+  let saving = false;
+  form.addEventListener('submit', e => {
+    rows.forEach(r => { tidy(S(r)); tidy(E(r)); }); refresh();
+    if (form.querySelector('.co-row.invalid')) { e.preventDefault(); alert('Please fix the highlighted branches: type both an opening and a closing time (they cannot be the same).'); return; }
+    saving = true;
+  });
+  window.addEventListener('beforeunload', e => { if (!saving && form.querySelector('.co-row.changed')) { e.preventDefault(); e.returnValue = ''; } });
+  // ---- "Test it": which date would a report get at a chosen day and time? (uses the times typed in the table, saved or not) ----
+  const trySel = document.getElementById('tryBranch'), tryDate = document.getElementById('tryDate'), tryTime = document.getElementById('tryTime');
+  const tryOut = document.getElementById('tryResult'), tryTbl = document.getElementById('tryTable');
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const utcDay = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+  const addDays = (dt, n) => new Date(dt.getTime() + n * 86400000);
+  const dayLabel = dt => DAYS[dt.getUTCDay()] + ' ' + dt.getUTCDate() + ' ' + MONS[dt.getUTCMonth()] + ' ' + dt.getUTCFullYear();
+  // the same rule the server uses: a report belongs to the most recent day that has STARTED
+  function judge(sMin, eMin, tMin, dayIso){
+    const day = utcDay(dayIso);
+    const open = sMin <= eMin ? (tMin >= sMin && tMin <= eMin) : (tMin >= sMin || tMin <= eMin);
+    let reportDay;
+    if (open) reportDay = (sMin <= eMin || tMin >= sMin) ? day : addDays(day, -1);      // the day that is running
+    else reportDay = (sMin <= eMin && tMin > eMin) ? addDays(day, 1) : day;             // closed: the NEXT day (about to open)
+    const nextStart = tMin < sMin ? day : addDays(day, 1);                              // when the next opening happens
+    return { reportDay, open, late: !open, nextStart };
+  }
+  function tryRow(){ return rows.find(r => S(r).name === 'start_' + trySel.value); }
+  function tryRefresh(){
+    const row = tryRow(); if (!row || !tryDate.value) { tryOut.textContent = 'Pick a branch and a day.'; return; }
+    const s = parse(S(row).value), e = parse(E(row).value), t = parse(tryTime.value);
+    if (s === null || e === null || s === e) { tryOut.innerHTML = '<b style="color:#B94A3F;">Fix this branch\'s opening and closing times in the table first.</b>'; tryTbl.innerHTML = ''; return; }
+    if (t === null) { tryOut.innerHTML = '<b style="color:#B94A3F;">Type the time like 6 am or 10:30 pm.</b>'; return; }
+    const sM = mins(s), eM = mins(e), tM = mins(t), v = judge(sM, eM, tM, tryDate.value), day = utcDay(tryDate.value);
+    const hours = fmt12(s) + ' → ' + fmt12(e) + (eM < sM ? ' (next day)' : '');
+    const unsaved = (s !== row.dataset.origStart || e !== row.dataset.origEnd) ? ' <span style="color:#1F8A5C; font-weight:700;">(using the unsaved times)</span>' : '';
+    let why;
+    if (v.open && tM <= eM && sM > eM && tM < sM) why = 'It is after midnight, but the day that started ' + dayLabel(v.reportDay) + ' is still running until ' + fmt12(e) + '.';
+    else if (v.open) why = 'The shop is open, so the report counts for the day that started ' + dayLabel(v.reportDay) + '.';
+    else why = '<b style="color:#8A5410;">The shop is closed — this is a LATE submission.</b> The waiter is asked to confirm, and the report counts as the <b>next day</b> (' + dayLabel(v.reportDay) + '), which opens at ' + fmt12(s) + '.';
+    tryOut.innerHTML = '<div style="font-size:16px;">A report submitted <b>' + dayLabel(day) + ' at ' + fmt12(t) + '</b> gets the date <b style="color:#1F3B4D; font-size:18px;">' + dayLabel(v.reportDay) + '</b></div>'
+      + '<div>' + why + '</div>'
+      + '<div style="color:#8A8578;">Hours: ' + hours + unsaved + ' · Next day starts: <b>' + dayLabel(v.nextStart) + ' at ' + fmt12(s) + '</b></div>';
+    // the whole day, hour by hour (+ the moments around opening and closing)
+    const marks = new Set(); for (let h = 0; h < 24; h++) marks.add(h * 60);
+    [sM - 1, sM, eM, eM + 1].forEach(m => marks.add(((m % 1440) + 1440) % 1440));
+    const ordered = [...marks].sort((a, b) => a - b);
+    tryTbl.innerHTML = '<thead><tr><th>Time submitted</th><th>Report date</th><th>Shop</th></tr></thead><tbody>' + ordered.map(m => {
+      const j = judge(sM, eM, m, tryDate.value);
+      const note = m === sM ? ' ◄ opens' : m === eM ? ' ◄ closes' : m === ((sM - 1 + 1440) % 1440) ? ' ◄ 1 min before opening' : m === ((eM + 1) % 1440) ? ' ◄ 1 min after closing' : '';
+      const chosen = m === tM ? ' style="background:#FFF6D6;"' : '';
+      return '<tr' + chosen + '><td>' + fmt12(hhmm(m)) + note + '</td><td><b>' + dayLabel(j.reportDay) + '</b></td><td>' + (j.open ? '<span class="badge ok">open</span>' : '<span class="badge flag" style="background:#FDF1E3; color:#8A5410;">closed — late</span>') + '</td></tr>';
+    }).join('') + '</tbody>';
+  }
+  const hhmm = m => pad(Math.floor(m / 60)) + ':' + pad(m % 60);
+  [trySel, tryDate].forEach(el => el.addEventListener('input', tryRefresh));
+  tryTime.addEventListener('input', tryRefresh);
+  tryTime.addEventListener('blur', () => { const ok = parse(tryTime.value); if (ok !== null) tryTime.value = fmt12(ok); tryRefresh(); });
+  tryTime.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tryTime.blur(); } });
+  window.tryCutoff = tryRefresh;           // (also handy for testing)
+
+  refresh();
+})();
+</script>
+{% endblock %}

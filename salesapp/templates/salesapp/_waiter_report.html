@@ -7,10 +7,7 @@
   <div style="overflow-x:auto;">
   <table>
     <thead><tr><th>Amount</th><th>Receipt</th></tr></thead>
-    <tbody><tr>
-      <td>{{ selected_entry.staff_discount }} RO</td>
-      <td>{% if selected_entry.staff_discount_attachment %}<a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-    </tr></tbody>
+    <tbody>{% for r in selected_entry.discount_rows %}<tr><td>{{ r.amount }} RO</td>{% if forloop.first %}<td rowspan="{{ selected_entry.discount_rows|length }}">{% if selected_entry.staff_discount_attachment %}<a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>{% endif %}</tr>{% endfor %}<tr><td><b>Total: {{ selected_entry.staff_discount }} RO</b></td><td></td></tr></tbody>
   </table>
   </div>
 </div>
@@ -68,7 +65,6 @@
 
 <div class="card">
   <h3>Summary</h3>
-  <div class="total-strip"><span>Actual (before discount)</span><span>{{ selected_entry.actual_total|add:selected_entry.staff_discount }} RO</span></div>
-  <div class="total-strip" style="margin-top:6px;"><span>Actual with Discount</span><span>{{ selected_entry.actual_total }} RO</span></div>
-  <div class="total-strip" style="margin-top:6px;"><span>Sales Actual (cash + visa, excl. delivery)</span><span>{{ selected_entry.sales_actual }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px;"><span>Actual (Cash + Visa)</span><span>{{ selected_entry.sales_actual }} RO</span></div>
+  <div class="total-strip" style="margin-top:6px;"><span>Actual with Discount</span><span>{{ selected_entry.actual_with_discount }} RO</span></div>
 </div>

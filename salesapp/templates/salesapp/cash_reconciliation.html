@@ -226,7 +226,7 @@ function prepareBulk(form){
   <h3>Cash Reconciliation</h3>
   {% if selected_handover %}
   <div class="grid grid-3">
-    <div class="total-strip"><span>Waiter cash (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+    <div class="total-strip"><span>Waiter cash</span><span>{{ selected_entry.cash_total }} RO</span></div>
     <div class="total-strip"><span>Collector cash (OMR + AED)</span><span>{{ selected_handover.cash_total }} RO</span></div>
     <div class="total-strip {% if selected_has_difference %}flag{% endif %}"><span>Difference</span><span>{{ selected_handover.diff_from_waiter }} RO</span></div>
   </div>

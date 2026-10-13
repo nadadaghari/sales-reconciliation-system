@@ -1,0 +1,108 @@
+{# Branch filter: a dropdown with search + checkboxes, branches grouped by brand (first word of the name). Needs branch_picker_groups, branch_selected_count. #}
+<style>
+  .bp { position:relative; }
+  .bp-btn { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; background:#fff; border:1px solid #E3DFD3; border-radius:10px; padding:9px 12px; font-size:14px; color:#1F3B4D; cursor:pointer; font-family:inherit; }
+  .bp-btn:hover { border-color:#C9C3B0; }
+  .bp-btn svg { flex:none; transition:transform .15s; }
+  .bp.open .bp-btn svg { transform:rotate(180deg); }
+  .bp-btn.has-value { border-color:#1F8A5C; background:#F3FAF6; font-weight:600; }
+  .bp-panel { position:absolute; z-index:60; top:calc(100% + 6px); left:0; min-width:280px; width:max(100%, 300px); background:#fff; border:1px solid #E3DFD3; border-radius:14px; box-shadow:0 14px 36px rgba(31,59,77,.16); padding:10px; }
+  .bp-panel[hidden] { display:none; }
+  .bp-search { width:100%; max-width:none !important; border:1px solid #E3DFD3; border-radius:8px; padding:8px 10px; font-size:13px; margin-bottom:8px; }
+  .bp-bar { display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#8A8578; margin:0 2px 6px; }
+  .bp-clear { background:none; border:none; color:#B94A3F; font-weight:700; font-size:12px; cursor:pointer; padding:0; }
+  .bp-list { max-height:300px; overflow-y:auto; margin:0 -4px; padding:0 4px; }
+  .bp-group { margin-bottom:6px; }
+  .bp-brand { display:flex; align-items:center; gap:8px; background:#F7F5EE; border-radius:8px; padding:7px 9px; font-size:13px; color:#1F3B4D; cursor:pointer; margin:0; }
+  .bp-brand .bp-count { margin-left:auto; font-size:11px; color:#8A8578; font-weight:600; }
+  .bp-item { display:flex; align-items:center; gap:8px; padding:6px 9px 6px 28px; font-size:13px; color:#3D3A31; cursor:pointer; border-radius:6px; margin:0; font-weight:400; }
+  .bp-item:hover { background:#FAF9F5; }
+  .bp-item small { color:#9A9585; }
+  .bp input[type=checkbox] { width:auto; margin:0; accent-color:#1F8A5C; }
+  .bp-none { display:none; text-align:center; color:#8A8578; font-size:13px; padding:14px 0; }
+</style>
+
+<div class="bp" id="bp">
+  <button type="button" class="bp-btn" id="bpBtn" aria-haspopup="true" aria-expanded="false">
+    <span id="bpLabel">All branches</span>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A8578" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  </button>
+  <div class="bp-panel" id="bpPanel" hidden>
+    <input type="search" id="bpSearch" class="bp-search" placeholder="Search a branch or brand..." autocomplete="off">
+    <div class="bp-bar"><span id="bpCount"></span><button type="button" class="bp-clear" id="bpClear">Clear all</button></div>
+    <div class="bp-list" id="bpList">
+      {% for g in branch_picker_groups %}
+      <div class="bp-group" data-brand="{{ g.brand|lower }}">
+        <label class="bp-brand"><input type="checkbox" class="bp-all" {% if g.all_checked %}checked{% endif %}> <b>All {{ g.brand }}</b> <span class="bp-count">{{ g.branches|length }} branch{{ g.branches|length|pluralize:",es" }}</span></label>
+        {% for b in g.branches %}
+        <label class="bp-item" data-name="{{ b.name|lower }}"><input type="checkbox" class="bp-one" name="branch_filter" value="{{ b.name }}" {% if b.checked %}checked{% endif %}> <span>{{ b.name }}{% if b.inactive %} <small>(inactive)</small>{% endif %}</span></label>
+        {% endfor %}
+      </div>
+      {% endfor %}
+      <div class="bp-none" id="bpNone">No branch matches your search.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const root = document.getElementById('bp'), btn = document.getElementById('bpBtn'), panel = document.getElementById('bpPanel');
+  const search = document.getElementById('bpSearch'), label = document.getElementById('bpLabel'), count = document.getElementById('bpCount');
+  const groups = [...root.querySelectorAll('.bp-group')];
+  const ones = () => [...root.querySelectorAll('.bp-one')];
+
+  function visibleOnes(group){ return [...group.querySelectorAll('.bp-item')].filter(i => i.style.display !== 'none').map(i => i.querySelector('.bp-one')); }
+
+  function sync(){
+    const parts = [];
+    groups.forEach(g => {
+      const boxes = [...g.querySelectorAll('.bp-one')], n = boxes.filter(b => b.checked).length, all = g.querySelector('.bp-all');
+      all.checked = n === boxes.length && n > 0;
+      all.indeterminate = n > 0 && n < boxes.length;
+      const brand = g.querySelector('.bp-brand b').textContent.replace(/^All /, '');
+      if (all.checked && boxes.length > 1) parts.push('All ' + brand);
+      else boxes.filter(b => b.checked).forEach(b => parts.push(b.value));
+    });
+    const total = ones().filter(b => b.checked).length;
+    label.textContent = !total ? 'All branches' : (parts.length <= 2 ? parts.join(', ') : total + ' branches selected');
+    btn.classList.toggle('has-value', total > 0);
+    count.textContent = total ? total + ' selected' : 'Nothing selected = all branches';
+  }
+
+  function applySearch(){
+    const term = search.value.trim().toLowerCase();
+    let any = false;
+    groups.forEach(g => {
+      const brandHit = term && g.dataset.brand.includes(term);
+      let shown = 0;
+      g.querySelectorAll('.bp-item').forEach(i => {
+        const hit = !term || brandHit || i.dataset.name.includes(term);
+        i.style.display = hit ? '' : 'none'; if (hit) shown++;
+      });
+      g.style.display = shown ? '' : 'none'; if (shown) any = true;
+    });
+    document.getElementById('bpNone').style.display = any ? 'none' : 'block';
+  }
+
+  function setOpen(open){
+    panel.hidden = !open; root.classList.toggle('open', open); btn.setAttribute('aria-expanded', open);
+    if (open) { search.focus(); }
+  }
+
+  btn.addEventListener('click', () => setOpen(panel.hidden));
+  document.addEventListener('click', e => { if (!root.contains(e.target)) setOpen(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') setOpen(false); });
+  search.addEventListener('input', applySearch);
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });   // Enter in the search box must not submit the form
+
+  groups.forEach(g => {
+    g.querySelector('.bp-all').addEventListener('change', e => {
+      visibleOnes(g).forEach(b => { b.checked = e.target.checked; });   // "All KUCU" ticks (or clears) the branches in view
+      sync();
+    });
+  });
+  ones().forEach(b => b.addEventListener('change', sync));
+  document.getElementById('bpClear').addEventListener('click', () => { ones().forEach(b => b.checked = false); sync(); });
+  sync();
+})();
+</script>

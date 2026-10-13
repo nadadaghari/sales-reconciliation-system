@@ -19,7 +19,7 @@
       </div>
       <div>
         <label>Filter by Branch</label>
-        <input name="branch_filter" value="{{ branch_filter }}" placeholder="e.g. Kucu Ibri">
+        {% include "salesapp/_branch_picker.html" %}
       </div>
       <div>
         <label>Date From</label>
@@ -34,6 +34,7 @@
         <input name="search_ref" value="{{ search_ref }}" placeholder="e.g. K-DH001-0002">
       </div>
     </div>
+    <div style="margin-bottom:14px;">{% include "salesapp/_collected_filter.html" %}</div>
     <button type="submit" class="btn small">Apply</button>
   </form>
 
@@ -81,7 +82,7 @@
           <td><strong>{{ e.reference_id }}</strong></td>
           <td>{{ e.date }}</td>
           <td>Shift {{ e.shift }}</td>
-          <td>{{ e.accountant|default:"-" }}</td>
+          <td>{% include "salesapp/_submitter.html" with name=e.accountant punch=e.submitted_punch %}</td>
           <td>{{ e.cash_total|floatformat:3 }}</td>
           <td>
             {% if e.simple_status == 'reconciled' %}
@@ -98,17 +99,17 @@
             {% endif %}
           </td>
           <td>
-            <a href="?entry_id={{ e.id }}&{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="icon-btn edit" title="Select">
+            <a href="?entry_id={{ e.id }}&{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{{ branch_qs|safe }}{{ collected_qs|safe }}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}" class="icon-btn edit" title="Select">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </a>
           </td>
           <td>
-            <form method="post" action="{% url 'archive_entry' e.id %}" style="display:inline;" onsubmit="return confirm('Archive {{ e.reference_id }}?');">
+            {% if not is_viewer %}<form method="post" action="{% url 'archive_entry' e.id %}" style="display:inline;" onsubmit="return confirm('Archive {{ e.reference_id }}?');">
               {% csrf_token %}
               <button type="submit" class="icon-btn delete" title="Archive">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
               </button>
-            </form>
+            </form>{% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -196,15 +197,15 @@ function toggleBranchGroup(id){
 {% if selected_entry %}
 <div class="modal-overlay">
 <div class="modal-box">
-<a href="{% if next_url %}{{ next_url }}{% else %}{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}{% endif %}" class="modal-close" title="Close">&times;</a>
+<a href="{% if next_url %}{{ next_url }}{% else %}{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{{ branch_qs|safe }}{{ collected_qs|safe }}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}{% endif %}" class="modal-close" title="Close">&times;</a>
 <div class="modal-inner">
-<a href="{% if next_url %}{{ next_url }}{% else %}{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}{% endif %}" class="btn secondary small" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; margin-bottom:16px;">
+<a href="{% if next_url %}{{ next_url }}{% else %}{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{{ branch_qs|safe }}{{ collected_qs|safe }}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}{% endif %}" class="btn secondary small" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; margin-bottom:16px;">
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
   Back
 </a>
 
 <div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px 14px; background:#F7F5EE; border:1px solid #E7E4DB; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#6F6A5C;">
-  <span>Submitted by <b style="color:#1F3B4D; font-size:15px;">{{ selected_entry.accountant|default:"—" }}</b></span>
+  <span>Submitted by <b style="color:#1F3B4D; font-size:15px;">{{ selected_entry.accountant|default:"—" }}</b>{% if selected_entry.submitted_punch %}<span style="display:inline-block; margin-left:6px; padding:1px 8px; border-radius:20px; background:#EEF1F4; color:#1F3B4D; font-size:11px; font-weight:700; letter-spacing:.3px; vertical-align:middle; font-size:12px;">{{ selected_entry.submitted_punch }}</span>{% endif %}</span>
   <span>·</span><span>{{ selected_entry.branch.name }}</span>
   <span>·</span><span>{{ selected_entry.date|date:"d M Y" }}</span>
   <span>·</span><span>Shift {{ selected_entry.shift }}</span>
@@ -227,10 +228,7 @@ function toggleBranchGroup(id){
     <div style="overflow-x:auto;">
     <table>
       <thead><tr><th>Amount</th><th>Receipt</th></tr></thead>
-      <tbody><tr>
-        <td>{{ selected_entry.staff_discount }} RO</td>
-        <td>{% if selected_entry.staff_discount_attachment %}<a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>
-      </tr></tbody>
+      <tbody>{% for r in selected_entry.discount_rows %}<tr><td>{{ r.amount }} RO</td>{% if forloop.first %}<td rowspan="{{ selected_entry.discount_rows|length }}">{% if selected_entry.staff_discount_attachment %}<a href="{{ selected_entry.staff_discount_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View</a>{% else %}-{% endif %}</td>{% endif %}</tr>{% endfor %}<tr><td><b>Total: {{ selected_entry.staff_discount }} RO</b></td><td></td></tr></tbody>
     </table>
     </div>
   </div>
@@ -296,7 +294,8 @@ function toggleBranchGroup(id){
 <div id="tabCashC">
 {% include "salesapp/_cash_report_card.html" %}
 
-<form method="post">
+<form method="post" enctype="multipart/form-data">
+<fieldset {% if is_viewer %}disabled{% endif %} style="border:0; padding:0; margin:0; min-width:0;">
   {% csrf_token %}
   <input type="hidden" name="shift_entry_id" value="{{ selected_entry.id }}">
 
@@ -347,23 +346,35 @@ function toggleBranchGroup(id){
 
   <div class="card">
     <h3>Comparison</h3>
-    <div class="total-strip"><span>Waiter Cash (after cancellation)</span><span>{{ selected_entry.cash_total }} RO</span></div>
+    <div class="total-strip"><span>Waiter Cash</span><span>{{ selected_entry.cash_total }} RO</span></div>
     <div class="total-strip" style="margin-top:6px;"><span>Collector Cash Total (OMR + AED)</span><span id="cActualDisplay">0.000</span></div>
     <div class="total-strip" id="diffWaiterStrip" style="margin-top:6px;"><span>Cash Difference (Collector − Waiter)</span><span id="diffWaiterDisplay">0.000</span></div>
-    <div style="margin-top:12px;"><label>Collector Notes</label><input name="notes" style="max-width:100%;" value="{{ selected_handover.notes|default:'' }}"></div>
-    <button type="submit" class="btn" style="margin-top:14px;">Save Collector Handover</button>
-    <a href="{% if next_url %}{{ next_url }}{% else %}{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{% if branch_filter %}branch_filter={{ branch_filter }}&{% endif %}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}{% endif %}" class="btn secondary" style="margin-top:14px; margin-left:8px; text-decoration:none; display:inline-block;">Back</a>
   </div>
+
+  <div class="card">
+    <h3>Notes</h3>
+    <div>
+      <label>Notes</label>
+      <textarea name="notes" rows="4" style="max-width:100%;" placeholder="Anything audit should know about this cash...">{{ selected_handover.notes|default:'' }}</textarea>
+    </div>
+    <div style="margin-top:12px;"><label>Attach Photo / PDF of the invoice {% if not selected_handover.proof_attachment and not is_viewer %}<span style="color:#C0392B;">*</span>{% endif %}</label>
+      {% if selected_handover.proof_attachment %}<div style="margin-bottom:6px;"><a href="{{ selected_handover.proof_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 View attachment</a></div>{% endif %}
+      {% if not is_viewer %}<input type="file" name="proof_attachment" accept="image/*,.pdf" {% if not selected_handover.proof_attachment and request.user.profile.role == 'collector' %}required{% endif %} style="max-width:100%;">{% elif not selected_handover.proof_attachment %}<div style="font-size:13px; color:#8A8578;">Not uploaded yet</div>{% endif %}
+    </div>
+    {% if not is_viewer %}<button type="submit" class="btn" style="margin-top:14px;">Save Collector Handover</button>{% endif %}
+    <a href="{% if next_url %}{{ next_url }}{% else %}{% url 'collector' %}?{% for s in shift_filter %}shift_filter={{ s }}&{% endfor %}{{ branch_qs|safe }}{{ collected_qs|safe }}{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}{% endif %}{% endif %}" class="btn secondary" style="margin-top:14px; margin-left:8px; text-decoration:none; display:inline-block;">Back</a>
+  </div>
+</fieldset>
 </form>
 
 {% include "salesapp/_history_card.html" with history=cash_history title="Cash History" %}
 
 </div>
 
-<form method="post" action="{% url 'archive_entry' selected_entry.id %}" onsubmit="return confirm('Archive {{ selected_entry.reference_id }}?');" style="margin-top:10px;">
+{% if not is_viewer %}<form method="post" action="{% url 'archive_entry' selected_entry.id %}" onsubmit="return confirm('Archive {{ selected_entry.reference_id }}?');" style="margin-top:10px;">
   {% csrf_token %}
   <button type="submit" class="btn secondary">{% if selected_entry.is_archived %}Unarchive{% else %}Archive{% endif %} This Entry</button>
-</form>
+</form>{% endif %}
 
 {{ selected_handover.cash_counts|default:"{}"|json_script:"existingCounts" }}
 {{ selected_handover.cash_counts_aed|default:"{}"|json_script:"existingCountsAed" }}
