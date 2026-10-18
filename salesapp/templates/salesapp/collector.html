@@ -285,7 +285,6 @@ function toggleBranchGroup(id){
   {% if selected_entry.is_audited %}
   <div class="card">
     <h3>Sales Review</h3>
-    <div class="total-strip"><span>Expected from Foodics</span><span>{{ selected_entry.expected_foodics }} RO</span></div>
     <div class="total-strip" style="margin-top:6px;"><span>Sales Actual (cash + visa, excl. delivery)</span><span>{{ selected_entry.sales_actual }} RO</span></div>
   </div>
   {% endif %}

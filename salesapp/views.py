@@ -1,4 +1,5 @@
 import re
+import unicodedata
 import csv
 import datetime
 import io
@@ -23,12 +24,12 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from .constants import DENOMS, AED_DENOMS, DELIVERY_SOURCES, SHIFT_CHOICES
 from .decorators import role_required
-from .models import Branch, ShiftEntry, CollectorHandover, UserProfile, VisaMachineFile, ActivityLog, _fmt12
+from .models import Branch, ShiftEntry, CollectorHandover, UserProfile, VisaMachineFile, NotesFile, ActivityLog, DayClose, _fmt12
 
 
 def login_view(request):
     if request.user.is_authenticated:
-        return _redirect_for_role(request.user)
+        return _redirect_after_login(request, request.user)
     if request.method == 'POST':
         username = request.POST.get('username', '').strip()
         password = request.POST.get('password', '')
@@ -47,7 +48,7 @@ def login_view(request):
         _clear_attempts(cache_key)
         login(request, user)
         log_activity(request, 'login_success', user=user)
-        return _redirect_for_role(user)
+        return _redirect_after_login(request, user)
     return render(request, 'salesapp/login.html')
 
 
@@ -57,7 +58,7 @@ def branch_login_view(request):
     a real password (hashed, not a raw 2-digit guess). Repeated failures are
     rate-limited below."""
     if request.user.is_authenticated:
-        return _redirect_for_role(request.user)
+        return _redirect_after_login(request, request.user)
     if request.method == 'POST':
         branch_code = request.POST.get('branch_code', '').strip()
         punch_id = request.POST.get('punch_id', '').strip()
@@ -78,7 +79,7 @@ def branch_login_view(request):
             messages.error(request, 'This branch is deactivated. Contact your admin.')
             return redirect('login')
 
-        profile = UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=punch_id).select_related('user').first()
+        profile = _find_waiter_by_punch(branch, punch_id)
         if not profile:
             _register_failed_attempt(cache_key)
             log_activity(request, 'login_failed', description=f'branch code: {branch_code}, punch id: {punch_id}')
@@ -118,7 +119,7 @@ def register_view(request):
     the branch's code (proves they belong there) and a password. The branch
     code is checked on the server, and failed tries are rate-limited per IP."""
     if request.user.is_authenticated:
-        return _redirect_for_role(request.user)
+        return _redirect_after_login(request, request.user)
 
     branches = Branch.objects.filter(is_active=True).order_by('name')
     form = {'name': '', 'punch_id': '', 'branch': '', 'branch_code': ''}
@@ -146,8 +147,8 @@ def register_view(request):
         elif form['branch_code'] and form['branch_code'].lower() != branch.code.lower():
             cache.set(cache_key, cache.get(cache_key, 0) + 1, LOGIN_LOCKOUT_SECONDS)
             error = 'That branch code does not match the selected branch.'
-        elif UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=form['punch_id']).exists():
-            error = f'{branch.name} already has someone registered with Punch ID "{form["punch_id"]}". Check your Punch ID, or ask your admin.'
+        elif _find_waiter_by_punch(branch, form['punch_id']):
+            error = f'{branch.name} already has someone registered with this Punch ID ("{_find_waiter_by_punch(branch, form["punch_id"]).punch_id}"). Check your Punch ID, or ask your admin.'
         elif len(password) < 8:
             error = 'Please choose a password of at least 8 characters.'
         elif password != password2:
@@ -229,6 +230,19 @@ def _int(value, default=0):
         return default
 
 
+def _redirect_after_login(request, user):
+    """Like _redirect_for_role, but an account with no role (profile) can never bounce
+    between the login page and itself: a superuser goes to /admin/, anyone else is logged
+    out with a message."""
+    if getattr(user, 'profile', None) is None:
+        if user.is_superuser:
+            return redirect('/admin/')
+        logout(request)
+        messages.error(request, 'This account has no role assigned yet. Please ask an admin to set it up.')
+        return redirect('staff_login')
+    return _redirect_for_role(user)
+
+
 def _redirect_for_role(user):
     """Send an already-logged-in user to the page that matches their role,
     instead of always sending them to Waiter Entry (which would 403 for non-waiters)."""
@@ -282,6 +296,19 @@ def _parse_visa_rows(request):
             'file': request.FILES.get(f'visa_attachment_{row_id}'),
         })
     return rows
+
+
+_NOTE_FILE_EXT = ('.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp')
+
+
+def _save_notes_files(entry, request):
+    for f in request.FILES.getlist('notes_files'):
+        NotesFile.objects.create(entry=entry, file=f)
+
+
+def _notes_files_ok(request):
+    files = request.FILES.getlist('notes_files')
+    return bool(files) and all(f.name.lower().endswith(_NOTE_FILE_EXT) for f in files)
 
 
 def _save_visa_files(entry, rows):
@@ -693,6 +720,13 @@ def entry_view(request):
         if shift not in dict(SHIFT_CHOICES):
             messages.error(request, 'Please choose the shift (1, 2 or 3).')
             return redirect('entry')
+        _n_shifts = max(int(branch.shifts_per_day or 1), 1)
+        if int(shift) > _n_shifts:
+            messages.error(request, f'This branch works {_n_shifts} shift(s) per day (Settings), so shift {shift} cannot be submitted.')
+            return redirect('entry')
+        if ShiftEntry.objects.filter(branch=branch, date=date, shift=shift, is_archived=False).exists():
+            messages.error(request, f'Shift {shift} for {branch.name} on {date} has already been submitted. A shift can only be submitted once; ask Audit if it needs a change.')
+            return redirect('entry')
 
         cash_counts = {d: _int(request.POST.get(f'denom_{d}', 0)) for d in DENOMS}
         cash_counts_aed = {d: _int(request.POST.get(f'denom_aed_{d}', 0)) for d in AED_DENOMS}
@@ -719,6 +753,10 @@ def entry_view(request):
             return redirect('entry')
         if _disc_total > 0 and not request.FILES.get('discount_attachment'):
             messages.error(request, 'Please attach the receipt photo for the discount.')
+            return redirect('entry')
+
+        if not _notes_files_ok(request):
+            messages.error(request, 'Please upload Close Till Foodics (photo, several photos, or a PDF).')
             return redirect('entry')
 
         entry = ShiftEntry(
@@ -753,6 +791,7 @@ def entry_view(request):
                 setattr(entry, f'delivery_attachment_{key}', uploaded)
         entry.save()
         _save_visa_files(entry, visa_rows)
+        _save_notes_files(entry, request)
 
         return redirect(f"/?submitted={entry.reference_id}")
 
@@ -761,9 +800,10 @@ def entry_view(request):
         'aed_denoms': AED_DENOMS,
         'denom_pairs': list(zip(DENOMS, AED_DENOMS)),
         'delivery_sources': DELIVERY_SOURCES,
-        'shift_choices': SHIFT_CHOICES,
+        'shift_choices': [c for c in SHIFT_CHOICES if not locked_branch or int(c[0]) <= max(int(locked_branch.shifts_per_day or 1), 1)],
         'active_tab': 'entry',
         'locked_branch': locked_branch,
+        'done_shifts': (set(ShiftEntry.objects.filter(branch=locked_branch, date=profile.branch.business_date(), is_archived=False).values_list('shift', flat=True)) if (locked_branch and profile.role == 'waiter') else set()),
         'head_cashier_name': profile.head_cashier_name if profile.role == 'waiter' else None,
         'today': (profile.branch.business_date() if profile.branch else timezone.localdate()) if profile.role == 'waiter' else None,
         'punch_id': (profile.punch_id or '') if profile.role == 'waiter' else '',
@@ -1006,6 +1046,8 @@ def dashboard_view(request):
             raise PermissionDenied('Managers have view-only access.')
         entry_id = request.POST.get('entry_id')
         entry = get_object_or_404(ShiftEntry, id=entry_id)
+        if request.POST.get('action') == 'close_day':
+            return _close_day(request, entry)
         before_snap = _shift_snapshot(entry)
         if not entry.original_snapshot:
             entry.original_snapshot = before_snap   # legacy shift: baseline = how it stood before this edit
@@ -1016,6 +1058,9 @@ def dashboard_view(request):
             entry.date = request.POST.get('date')
         if request.POST.get('shift'):
             entry.shift = request.POST.get('shift')
+        if (entry.date, entry.shift) != (old_date, old_shift) and ShiftEntry.objects.filter(branch=entry.branch, date=entry.date, shift=entry.shift, is_archived=False).exclude(pk=entry.pk).exists():
+            messages.error(request, f'Shift {entry.shift} already exists for {entry.branch.name} on {entry.date}.')
+            return redirect('edit_entry', entry_id=entry.id)
         entry.accountant = request.POST.get('accountant', '').strip()
         if entry.accountant != old_accountant:
             entry.submitted_punch = _punch_for(entry.branch, entry.accountant)   # a different name -> its own Punch ID (or none)
@@ -1103,6 +1148,16 @@ def dashboard_view(request):
             ).order_by('-created_at')
         )
 
+    day_status = day_history = None
+    day_flagged = False
+    if selected_entry:
+        day_status = _day_status(selected_entry.branch, selected_entry.date)
+        day_history = list(ActivityLog.objects.filter(
+            action='day_closed', description=f'{selected_entry.branch.name} {selected_entry.date}'
+        ).order_by('-created_at'))
+        if day_status['day'] is not None:
+            day_flagged = abs(day_status['day'].variance) > threshold
+
     qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=False)
 
     shift_filter = request.GET.getlist('shift_filter')
@@ -1132,10 +1187,20 @@ def dashboard_view(request):
     if selected_stages:
         staged = [(e, st) for e, st in staged if st in selected_stages]
 
+    day_closes = {(d.branch_id, d.date): d for d in DayClose.objects.filter(
+        branch_id__in={e.branch_id for e, _ in staged}, date__in={e.date for e, _ in staged})}
+    last_shift = {}
+    for e, _ in staged:
+        k = (e.branch_id, e.date)
+        if k not in last_shift or int(e.shift) > int(last_shift[k]):
+            last_shift[k] = e.shift
+
     branch_groups_map = {}
     for e, stage in staged:
-        foodics_entered = e.expected_foodics != 0
-        has_issue = foodics_entered and abs(e.variance) > threshold
+        k = (e.branch_id, e.date)
+        # the day's Foodics / variance sit on the day's last shift row (one figure per day)
+        day = day_closes.get(k) if str(last_shift[k]) == str(e.shift) else None
+        has_issue = bool(day) and abs(day.variance) > threshold
 
         group = branch_groups_map.setdefault(e.branch_id, {
             'branch': e.branch,
@@ -1143,8 +1208,10 @@ def dashboard_view(request):
             'total_variance': Decimal('0'),
             'total_actual': Decimal('0'),
         })
-        group['rows'].append({'entry': e, 'stage': stage, 'has_issue': has_issue})
-        group['total_variance'] += e.variance
+        group['rows'].append({'entry': e, 'stage': stage, 'has_issue': has_issue, 'day': day,
+                              'day_variance': day.variance if day else None})
+        if day:
+            group['total_variance'] += day.variance
         group['total_actual'] += e.sales_actual
 
     branch_groups = sorted(branch_groups_map.values(), key=lambda g: g['branch'].name)
@@ -1166,7 +1233,9 @@ def dashboard_view(request):
     context = {
         'review_log': review_log,
         'variance_threshold': threshold,
-        'foodics_flagged': bool(selected_entry and selected_entry.expected_foodics != 0 and abs(selected_entry.variance) > threshold),
+        'day_status': day_status,
+        'day_history': day_history,
+        'day_flagged': day_flagged,
         'branch_groups': branch_groups,
         'shift_filter': shift_filter,
         'shift_choices': SHIFT_CHOICES,
@@ -1221,8 +1290,9 @@ def create_user_view(request):
             if not punch_id:
                 messages.error(request, 'Please set a Punch ID — it identifies this waiter when several share the same branch.')
                 return redirect('create_user')
-            if UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=punch_id).exists():
-                messages.error(request, f'{branch.name} already has a waiter with Punch ID "{punch_id}". Use a different one.')
+            _dup = _find_waiter_by_punch(branch, punch_id)
+            if _dup:
+                messages.error(request, f'{branch.name} already has a waiter with this Punch ID ("{_dup.punch_id}", {_dup.head_cashier_name}). Use a different one.')
                 return redirect('create_user')
             if len(password) < 8:
                 messages.error(request, 'Please set a password of at least 8 characters for this waiter account.')
@@ -1292,13 +1362,15 @@ def create_user_view(request):
 @role_required('admin')
 def add_branch_view(request):
     if request.method == 'POST':
-        name = request.POST.get('name', '').strip()
+        name = _clean_branch_name(request.POST.get('name', ''))
         code = request.POST.get('code', '').strip()
+        _names = {_norm_branch_name(n) for n in Branch.objects.values_list('name', flat=True)}
+        _codes = {_norm_branch_code(c) for c in Branch.objects.exclude(code__isnull=True).values_list('code', flat=True)}
         if not name:
             messages.error(request, 'Please enter a branch name.')
-        elif Branch.objects.filter(name__iexact=name).exists():
+        elif _norm_branch_name(name) in _names:
             messages.error(request, 'That branch already exists.')
-        elif code and Branch.objects.filter(code__iexact=code).exists():
+        elif code and _norm_branch_code(code) in _codes:
             messages.error(request, 'That branch code is already used.')
         else:
             Branch.objects.create(name=name, code=code or None)
@@ -1405,24 +1477,82 @@ def import_branches_view(request):
         )
         return redirect('add_branch')
 
-    created, skipped = 0, 0
-    for row in rows:
-        name = str(row.get(name_col) or '').strip()
+    names = {_norm_branch_name(b.name): b.name for b in Branch.objects.all()}
+    codes = {_norm_branch_code(b.code): b.name for b in Branch.objects.exclude(code__isnull=True)}
+    created, blank = 0, 0
+    skipped = []   # (line number, name, why)
+    for line_no, row in enumerate(rows, start=2):   # line 1 is the header
+        name = _clean_branch_name(row.get(name_col))
         code = str(row.get(code_col) or '').strip() if code_col else ''
         if not name:
+            if code:
+                skipped.append((line_no, f'(code {code})', 'no branch name'))
+            else:
+                blank += 1
             continue
-        # Case-insensitive check (matches the manual "Add Branch" form's logic) —
-        # avoids near-duplicate rows like "Kucu Ibri" vs "kucu ibri" from a
-        # spreadsheet with inconsistent capitalization.
-        if Branch.objects.filter(name__iexact=name).exists():
-            skipped += 1
+        nkey, ckey = _norm_branch_name(name), _norm_branch_code(code)
+        if nkey in names:
+            skipped.append((line_no, name, f'name already exists ("{names[nkey]}")'))
+            continue
+        if ckey and ckey in codes:
+            skipped.append((line_no, name, f'code "{code}" already used by "{codes[ckey]}"'))
             continue
         Branch.objects.create(name=name, code=code or None)
+        names[nkey] = name
+        if ckey:
+            codes[ckey] = name
         created += 1
 
-    log_activity(request, 'branch_created', description=f'Bulk import: {created} added, {skipped} skipped')
-    messages.success(request, f'Import finished: {created} branch(es) added, {skipped} already existed.')
+    log_activity(request, 'branch_created', description=f'Bulk import: {created} added, {len(skipped)} skipped')
+    if created:
+        messages.success(request, f'Import finished: {created} branch(es) added, {len(skipped)} skipped (duplicates or missing name).')
+    else:
+        messages.warning(request, f'Nothing was added: {len(skipped)} row(s) skipped (duplicates or missing name).')
+    for line_no, nm, why in skipped[:12]:
+        messages.warning(request, f'Line {line_no}: {nm} skipped, {why}.')
+    if len(skipped) > 12:
+        messages.warning(request, f'… and {len(skipped) - 12} more skipped rows.')
     return redirect('add_branch')
+
+
+
+# ── Duplicate rules ────────────────────────────────────────────────────────
+_EASTERN_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789')
+
+
+def _norm_punch(value):
+    """A Punch ID reduced to its identity: Arabic digits -> 0-9, spaces/dashes dropped,
+    case ignored, and leading zeros ignored for numeric IDs — so 0123, 123 and ١٢٣
+    all count as the same ID."""
+    s = unicodedata.normalize('NFKC', str(value or '')).translate(_EASTERN_DIGITS)
+    s = re.sub(r'[\s\-_./]+', '', s).casefold()
+    return (s.lstrip('0') or '0') if s.isdigit() else s
+
+
+def _find_waiter_by_punch(branch, punch, exclude_id=None):
+    """The waiter of `branch` whose Punch ID matches `punch` after normalising, else None."""
+    key = _norm_punch(punch)
+    if not key or branch is None:
+        return None
+    qs = UserProfile.objects.filter(role='waiter', branch=branch).select_related('user')
+    if exclude_id:
+        qs = qs.exclude(id=exclude_id)
+    for p in qs:
+        if _norm_punch(p.punch_id) == key:
+            return p
+    return None
+
+
+def _norm_branch_name(value):
+    return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', str(value or ''))).strip().casefold()
+
+
+def _norm_branch_code(value):
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value or ''))).casefold()
+
+
+def _clean_branch_name(value):
+    return re.sub(r'\s+', ' ', str(value or '')).strip()
 
 
 def _punch_for(branch, name):
@@ -1591,6 +1721,82 @@ def _parse_hhmm(raw):
     return datetime.time(hour, minute)
 
 
+def _day_status(branch, date):
+    """Where a business day stands: which of the branch's shifts have been submitted and
+    approved by Audit, and whether the day can be closed (Foodics for the whole day)."""
+    entries = list(ShiftEntry.objects.filter(branch=branch, date=date, is_archived=False).select_related('collector').order_by('shift'))
+    by_shift = {}
+    for e in entries:
+        by_shift.setdefault(str(e.shift), e)
+    wanted = [str(s) for s in range(1, max(int(branch.shifts_per_day or 1), 1) + 1)]
+    extra = sorted(s for s in by_shift if s not in wanted)
+    rows, missing, waiting = [], [], []
+    for s in wanted + extra:
+        e = by_shift.get(s)
+        if e is None:
+            rows.append({'shift': s, 'entry': None, 'state': 'missing'})
+            missing.append(s)
+        elif e.is_audited:
+            rows.append({'shift': s, 'entry': e, 'state': 'approved'})
+        else:
+            rows.append({'shift': s, 'entry': e, 'state': 'waiting'})
+            waiting.append(s)
+    total = sum((e.sales_actual for e in entries), Decimal('0'))
+    day = DayClose.objects.filter(branch=branch, date=date).first()
+    return {
+        'branch': branch, 'date': date, 'rows': rows, 'missing': missing, 'waiting': waiting,
+        'total_actual': total, 'day': day, 'can_close': not missing and not waiting and bool(entries),
+        'shifts_per_day': len(wanted),
+    }
+
+
+def _close_day(request, entry):
+    """Audit closes (or re-closes) the day of the opened shift: one Foodics figure for the
+    whole day. Every change is logged as from -> to, like the rest of the audit trail."""
+    status = _day_status(entry.branch, entry.date)
+    back = redirect(_reopen_url(request, '/dashboard/', entry.id))
+    if not status['can_close']:
+        parts = []
+        if status['missing']:
+            parts.append('not submitted yet: shift ' + ', '.join(status['missing']))
+        if status['waiting']:
+            parts.append('waiting for sales review: shift ' + ', '.join(status['waiting']))
+        messages.error(request, 'The day cannot be closed yet — ' + '; '.join(parts) + '.')
+        return back
+    raw = (request.POST.get('day_foodics') or '').strip()
+    if not raw:
+        messages.error(request, "Please enter the day's Foodics figure first.")
+        return back
+    foodics = _dec(raw)
+    note = (request.POST.get('day_note') or '').strip()
+    day = status['day']
+    actual = status['total_actual']
+    if day is None:
+        day = DayClose.objects.create(branch=entry.branch, date=entry.date, expected_foodics=foodics,
+                                      note=note, closed_by=request.user)
+        variance = actual - foodics
+        details = (f'Day closed: Foodics {foodics:.3f} · Sales Actual {actual:.3f} · Variance {variance:.3f}'
+                   + (f'\nNote: "{note}"' if note else ''))
+    else:
+        old_foodics, old_variance, old_note = Decimal(str(day.expected_foodics)), day.variance, day.note
+        lines = []
+        if old_foodics != foodics:
+            lines.append(f'Foodics: {old_foodics:.3f} → {foodics:.3f}')
+        new_variance = actual - foodics
+        if old_variance != new_variance:
+            lines.append(f'Variance: {old_variance:.3f} → {new_variance:.3f}')
+        if old_note != note:
+            lines.append(f'Note: "{note}"' if note else 'Note removed')
+        day.expected_foodics = foodics
+        day.note = note
+        day.closed_by = request.user
+        day.save()
+        details = 'Day re-closed\n' + '\n'.join(lines) if lines else 'Day re-closed, nothing changed'
+    log_activity(request, 'day_closed', description=day.label, details=details)
+    messages.success(request, f'{entry.branch.name} · {entry.date} closed.')
+    return back
+
+
 @role_required('audit', 'manager', 'admin')
 def audit_settings_view(request):
     """Audit's Settings page: each branch's opening and closing time, typed in by
@@ -1603,8 +1809,16 @@ def audit_settings_view(request):
     if request.method == 'POST':
         if is_viewer:
             raise PermissionDenied('Managers have view-only access.')
-        saved, bad, same = 0, [], []
+        saved, bad, same, saved_shifts = 0, [], [], 0
         for b in Branch.objects.all():
+            raw_shifts = (request.POST.get(f'shifts_{b.id}') or '').strip()
+            if raw_shifts in ('1', '2', '3') and int(raw_shifts) != b.shifts_per_day:
+                old_n = b.shifts_per_day
+                b.shifts_per_day = int(raw_shifts)
+                b.save(update_fields=['shifts_per_day'])
+                log_activity(request, 'branch_edited', description=f'{b.name}: shifts per day',
+                             details=f'Shifts per day changed from {old_n} to {b.shifts_per_day}')
+                saved_shifts += 1
             raw_start, raw_end = request.POST.get(f'start_{b.id}', ''), request.POST.get(f'end_{b.id}', '')
             if not raw_start.strip() and not raw_end.strip():
                 continue
@@ -1631,7 +1845,9 @@ def audit_settings_view(request):
             messages.error(request, "Opening and closing can't be the same time: " + ', '.join(same))
         if saved:
             messages.success(request, f'Saved the opening hours of {saved} branch{"es" if saved != 1 else ""}.')
-        elif not bad and not same:
+        if saved_shifts:
+            messages.success(request, f'Saved the number of shifts of {saved_shifts} branch{"es" if saved_shifts != 1 else ""}.')
+        if not saved and not saved_shifts and not bad and not same:
             messages.info(request, 'Nothing changed.')
         return redirect('audit_settings')
 
@@ -1642,6 +1858,7 @@ def audit_settings_view(request):
             'start': _fmt12(b.day_cutoff), 'end': _fmt12(b.effective_end),
             'start24': b.day_cutoff.strftime('%H:%M'), 'end24': b.effective_end.strftime('%H:%M'),
             'window': b.day_window, 'today': b.business_date(),
+            'shifts': b.shifts_per_day,
         })
     return render(request, 'salesapp/audit_settings.html', {
         'active_tab': 'audit_settings',
@@ -1685,6 +1902,15 @@ def _daily_report_context(request):
     def dec(v):
         return Decimal(str(v or 0))
 
+    # Foodics is one figure per day: it sits on the day's last shift row, and the totals count it once.
+    day_closes = {(d.branch_id, d.date): d for d in DayClose.objects.filter(
+        branch_id__in={e.branch_id for e in entries}, date__in={e.date for e in entries})}
+    last_shift = {}
+    for e in entries:
+        k = (e.branch_id, e.date)
+        if k not in last_shift or int(e.shift) > int(last_shift[k]):
+            last_shift[k] = e.shift
+
     # (key, label, side) — the table columns, Daily Sales first, then Cash
     sales_cols = [('discount', 'Discount'), ('visa', 'Visa')]
     sales_cols += [(f'del_{k}', label) for k, label in DELIVERY_SOURCES]
@@ -1715,14 +1941,16 @@ def _daily_report_context(request):
         elif not cash_ok:
             cash_collected += dec(h.cash_total); n_collected += 1
 
+        k = (e.branch_id, e.date)
+        day = day_closes.get(k) if str(last_shift[k]) == str(e.shift) else None
         dl = e.delivery_data or {}
         vals = {
             'discount': e.staff_discount, 'visa': e.visa_total,
             'del_cancel': e.delivery_cancel_amount, 'del_net': e.delivery_total,
             'orders': sum(int((dl.get(k, {}) or {}).get('orders') or 0) for k, _ in DELIVERY_SOURCES),
             'sales_actual': e.sales_actual,
-            'foodics': e.expected_foodics if sales_ok else None,
-            'variance': e.variance if sales_ok else None,
+            'foodics': day.expected_foodics if day else None,
+            'variance': day.variance if day else None,
             'waiter_cash': e.cash_total, 'cash_cancel': e.cash_cancel_amount, 'petty': e.petty_cash,
             'col_cash': h.cash_total if h is not None else None,
             'col_aed': (_aed_cash_total_from_counts(h.cash_counts_aed or {}) * dec(e.aed_exchange_rate)) if h is not None else None,
@@ -1912,13 +2140,15 @@ def edit_entry_view(request, entry_id):
         entry.shift = request.POST.get('shift')
         entry.accountant = request.POST.get('accountant', '').strip()
         visa_rows = _apply_waiter_financials(request, entry)
-        entry.expected_foodics = _dec(request.POST.get('expected_foodics'))
+        if 'expected_foodics' in request.POST:   # Foodics is now entered once per day (Day Close)
+            entry.expected_foodics = _dec(request.POST.get('expected_foodics'))
         entry.notes = request.POST.get('notes', '')
         if request.FILES.get('notes_attachment'):
             entry.notes_attachment = request.FILES['notes_attachment']
 
         entry.save()  # reference_id is untouched since it's already set
         _save_visa_files(entry, visa_rows)
+        _save_notes_files(entry, request)
 
         handover = getattr(entry, 'collector', None)
         if handover is not None:
@@ -2054,8 +2284,9 @@ def edit_user_view(request, user_id):
             if not punch_id:
                 messages.error(request, 'Please set a Punch ID — it identifies this waiter when several share the same branch.')
                 return redirect('edit_user', user_id=target.id)
-            if UserProfile.objects.filter(role='waiter', branch=branch, punch_id__iexact=punch_id).exclude(id=profile.id).exists():
-                messages.error(request, f'{branch.name} already has a different waiter with Punch ID "{punch_id}".')
+            _dup = _find_waiter_by_punch(branch, punch_id, exclude_id=profile.id)
+            if _dup:
+                messages.error(request, f'{branch.name} already has a different waiter with this Punch ID ("{_dup.punch_id}", {_dup.head_cashier_name}).')
                 return redirect('edit_user', user_id=target.id)
             if new_password and len(new_password) < 8:
                 messages.error(request, 'Password must be at least 8 characters.')

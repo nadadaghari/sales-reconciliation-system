@@ -20,6 +20,9 @@ class Branch(models.Model):
     # "automatic": one minute before the start, i.e. a full 24-hour day.
     day_cutoff = models.TimeField(default=datetime.time(0, 0))
     day_end = models.TimeField(null=True, blank=True)
+    # How many shifts the branch runs per day. The day can be closed (Foodics for the
+    # whole day) once shifts 1..N have all been submitted and approved by Audit.
+    shifts_per_day = models.PositiveSmallIntegerField(default=3)
 
     class Meta:
         ordering = ['name']
@@ -343,6 +346,16 @@ class VisaMachineFile(models.Model):
         return f'Visa file for {self.serial or "unknown machine"} ({self.entry})'
 
 
+class NotesFile(models.Model):
+    """One of the 'Close Till Foodics' photos / PDFs the waiter uploads with a shift."""
+    entry = models.ForeignKey(ShiftEntry, on_delete=models.CASCADE, related_name='notes_files')
+    file = models.FileField(upload_to='notes_attachments/%Y/%m/')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Close Till Foodics file ({self.entry})'
+
+
 class CollectorHandover(models.Model):
     """The collector's independent CASH recount for a shift entry. Visa and
     delivery money never passes through the collector, so only cash is
@@ -402,6 +415,42 @@ class CollectorHandover(models.Model):
         return f'Handover for {self.shift_entry}'
 
 
+class DayClose(models.Model):
+    """Foodics is reported once per business day, not per shift. When every shift of the
+    day has been submitted and approved, Audit enters the day's Foodics figure here and
+    closes the day. Variance = the day's Sales Actual (all its shifts) - Foodics."""
+
+    branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name='day_closes')
+    date = models.DateField()
+    expected_foodics = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    note = models.TextField(blank=True)
+    closed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    closed_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [('branch', 'date')]
+        ordering = ['-date', 'branch__name']
+
+    def shift_entries(self):
+        return ShiftEntry.objects.filter(branch=self.branch, date=self.date, is_archived=False).order_by('shift')
+
+    @property
+    def sales_actual(self):
+        return sum((e.sales_actual for e in self.shift_entries()), Decimal('0'))
+
+    @property
+    def variance(self):
+        return self.sales_actual - Decimal(str(self.expected_foodics or 0))
+
+    @property
+    def label(self):
+        return f'{self.branch.name} {self.date}'
+
+    def __str__(self):
+        return f'Day close {self.label}'
+
+
 class ActivityLog(models.Model):
     """A simple audit trail of who did what, for accountability. Deliberately
     keeps a text snapshot of the username, so the log entry still makes
@@ -427,6 +476,7 @@ class ActivityLog(models.Model):
         ('entry_unarchived', 'Shift Entry Unarchived'),
         ('handover_saved', 'Cash Collected'),
         ('entry_audited', 'Daily Sales Reviewed'),
+        ('day_closed', 'Day Closed'),
         ('cash_reconciled', 'Cash Reconciled'),
     ]
 

@@ -5,7 +5,7 @@
   .co-brand b { color:#1F3B4D; font-size:14px; }
   .co-brand .co-n { font-size:12px; color:#8A8578; }
   .co-brand .co-apply { margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:#6F6A5C; }
-  .co-row { display:grid; grid-template-columns:minmax(170px,1.2fr) 118px 118px minmax(190px,1.1fr) minmax(120px,.7fr); gap:12px; align-items:center; padding:8px 12px; border-bottom:1px solid #F0EEE7; font-size:13px; }
+  .co-row { display:grid; grid-template-columns:minmax(170px,1.2fr) 118px 118px 86px minmax(190px,1.1fr) minmax(120px,.7fr); gap:12px; align-items:center; padding:8px 12px; border-bottom:1px solid #F0EEE7; font-size:13px; }
   .co-row.head { font-size:11px; font-weight:700; color:#8A8578; letter-spacing:.4px; text-transform:uppercase; border-bottom:2px solid #E3DFD3; }
   .co-row input.co-t, .co-apply input.co-t { width:104px; padding:7px 10px; font-size:14px; text-align:center; font-variant-numeric:tabular-nums; letter-spacing:.5px; }
   .co-row.changed input.co-t { border-color:#1F8A5C; background:#F3FAF6; }
@@ -19,7 +19,7 @@
 </style>
 
 <div class="card">
-  <h3>Branch Cut-off Times</h3>
+  <h3>Branch Hours &amp; Shifts</h3>
   <p style="color:#6F6A5C; font-size:13px; margin:0 0 6px; line-height:1.6;">
     Type each branch's <b>opening time</b> and <b>closing time</b> yourself, with AM or PM (for example <b>10:00 AM</b> and <b>3:00 AM</b>).
     The closing time can be on the next calendar day.
@@ -29,6 +29,7 @@
     <li><b>After the shop closes and before it opens again</b>, the new day starts: the report counts for the <b>next day</b>. The waiter first gets a <b>"late submission — are you sure?"</b> message, and after OK the report shows <b>Late submission</b> on every dashboard.</li>
     <li><b>12:00 AM → 11:59 PM</b> means an ordinary calendar day (never closed, never late). Waiters see their branch's opening and closing time on their page.</li>
   </ul>
+  <p style="color:#6F6A5C; font-size:13px; margin:10px 0 0; line-height:1.6;"><b>Shifts / day</b> is how many shifts the branch runs. Audit can close the day (enter the day's Foodics) once all of these shifts have been submitted and approved.</p>
   <p style="color:#9A9585; font-size:12px; margin:6px 0 0;">Type it as <b>10 am</b>, <b>10:30 pm</b>, <b>3am</b> — or in 24-hour style (<b>22:30</b>). A number with no AM/PM is read as 24-hour. It is tidied up when you leave the box.</p>
   {% if is_viewer %}<div style="margin-top:10px; background:#FDF1E3; color:#8A5410; border:1px solid #F0D9B5; border-radius:8px; padding:8px 12px; font-size:13px; font-weight:600;">View only — changes are disabled for your role.</div>{% endif %}
 </div>
@@ -61,7 +62,7 @@
       <span style="margin-left:auto; font-size:12px; color:#8A8578;">Now: {{ now|date:"Y-m-d g:i A" }} (Muscat)</span>
     </div>
 
-    <div class="co-row head"><div>Branch</div><div>Opens</div><div>Closes</div><div>Opening hours</div><div>Current business date</div></div>
+    <div class="co-row head"><div>Branch</div><div>Opens</div><div>Closes</div><div>Shifts / day</div><div>Opening hours</div><div>Current business date</div></div>
 
     {% for g in brand_groups %}
     <div class="co-group" data-brand="{{ g.brand|lower }}">
@@ -77,10 +78,11 @@
         {% endif %}
       </div>
       {% for b in g.branches %}
-      <div class="co-row" data-name="{{ b.name|lower }}" data-orig-start="{{ b.start24 }}" data-orig-end="{{ b.end24 }}">
+      <div class="co-row" data-name="{{ b.name|lower }}" data-orig-start="{{ b.start24 }}" data-orig-end="{{ b.end24 }}" data-orig-shifts="{{ b.shifts }}">
         <div>{{ b.name }}{% if b.inactive %} <span class="co-small">(inactive)</span>{% endif %}</div>
         <div><input type="text" autocomplete="off" class="co-t co-start" name="start_{{ b.id }}" value="{{ b.start }}" placeholder="10:00 AM" maxlength="10" required {% if is_viewer %}disabled{% endif %}></div>
         <div><input type="text" autocomplete="off" class="co-t co-end" name="end_{{ b.id }}" value="{{ b.end }}" placeholder="3:00 AM" maxlength="10" required {% if is_viewer %}disabled{% endif %}></div>
+        <div><select class="co-shifts" name="shifts_{{ b.id }}" title="How many shifts this branch runs per day" {% if is_viewer %}disabled{% endif %}>{% for n in "123" %}<option value="{{ n }}" {% if b.shifts == forloop.counter %}selected{% endif %}>{{ n }}</option>{% endfor %}</select></div>
         <div class="co-win">{{ b.window }}</div>
         <div class="co-today">{{ b.today|date:"D d M Y" }}</div>
       </div>
@@ -91,7 +93,7 @@
 
     {% if not is_viewer %}
     <div style="margin-top:16px; display:flex; gap:10px; align-items:center;">
-      <button type="submit" class="btn" id="coSave">Save opening hours</button>
+      <button type="submit" class="btn" id="coSave">Save settings</button>
       <span style="font-size:12px; color:#8A8578;">Only the branches you changed are saved.</span>
     </div>
     {% endif %}
@@ -136,7 +138,8 @@
       else if (s === e) { bad = true; msg = "Opening and closing can't be the same"; }
       r.classList.toggle('invalid', bad); if (bad) invalid++;
       win.textContent = bad ? msg : windowText(s, e);
-      const ch = !bad && (s !== r.dataset.origStart || e !== r.dataset.origEnd);
+      const sh = r.querySelector('.co-shifts');
+      const ch = !bad && (s !== r.dataset.origStart || e !== r.dataset.origEnd || (sh && sh.value !== r.dataset.origShifts));
       r.classList.toggle('changed', ch); if (ch) changed++;
     });
     const note = document.getElementById('coChanged');

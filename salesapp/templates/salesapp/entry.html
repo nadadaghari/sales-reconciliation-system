@@ -50,7 +50,7 @@
       <div class="shift-pills" role="radiogroup" aria-label="Shift">
         <span class="shift-lbl">Shift</span>
         {% for value, label in shift_choices %}
-        <label class="shift-pill"><input type="radio" name="shift" value="{{ value }}" {% if forloop.first %}checked{% endif %} required><span>{{ label }}</span></label>
+        <label class="shift-pill" {% if value in done_shifts %}title="Already submitted" style="opacity:.45;cursor:not-allowed"{% endif %}><input type="radio" name="shift" value="{{ value }}" {% if value in done_shifts %}disabled{% elif not done_shifts and forloop.first %}checked{% endif %} required><span>{{ label }}{% if value in done_shifts %} ✓{% endif %}</span></label>
         {% endfor %}
       </div>
       <span id="chipOpen" class="hrs-chip hrs-open" {% if not branch_hours %}style="display:none"{% endif %}>Opens <b id="chipOpenTime">{{ branch_hours.open }}</b></span>
@@ -180,7 +180,9 @@
       <label>Notes</label>
       <textarea name="notes" rows="4" style="max-width:100%;" placeholder="Anything the collector or audit should know about this shift..."></textarea>
     </div>
-    <div style="margin-top:12px;"><label>Attach Photo / PDF (optional)</label><input type="file" name="notes_attachment" accept="image/*,.pdf"></div>
+    <div style="margin-top:12px;"><label><b>Please upload Close Till Foodics</b> <span style="color:#B3261E;">*</span></label>
+      <input type="file" name="notes_files" accept="image/*,.pdf" multiple required>
+      <div style="font-size:12px; color:#5C5A52; margin-top:4px;">Photo, several photos, or a PDF.</div></div>
   </div>
 
   <button type="submit" class="btn" id="submitBtn"{% if outside_hours %} disabled{% endif %}>Submit</button>

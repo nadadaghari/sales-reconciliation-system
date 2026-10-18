@@ -74,6 +74,7 @@
   .msg { padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:8px; }
   .msg.success { background:#E4F1EA; color:#2E7D5B; }
   .msg.error { background:#FBE9E6; color:#B94A3F; }
+  .msg.warning { background:#FBF3DD; color:#8A6410; }
   .subnav { display:flex; gap:18px; margin-bottom:16px; }
   .subnav a { font-size:13px; font-weight:600; color:#8A8578; text-decoration:none; padding-bottom:4px; border-bottom:2px solid transparent; }
   .subnav a.active { color:#1F3B4D; border-bottom:2px solid #1F3B4D; }
@@ -269,7 +270,12 @@ window.enhanceFileInputs = function(){
     wrapper.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
     input.parentNode.insertBefore(wrapper, input);
     wrapper.appendChild(input);
-    input.style.display = 'none';
+    if(input.required){   // a required input must stay focusable, or the browser silently blocks the submit
+      input.style.cssText = 'position:absolute; opacity:0; width:1px; height:1px; pointer-events:none;';
+      wrapper.style.position = 'relative';
+    } else {
+      input.style.display = 'none';
+    }
 
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -282,6 +288,8 @@ window.enhanceFileInputs = function(){
     link.target = '_blank';
     link.rel = 'noopener';
     link.style.cssText = 'font-size:12px; color:#3B6FE0; text-decoration:underline; display:none;';
+    const more = document.createElement('div');   // extra files when several are chosen at once
+    more.style.cssText = 'display:none; flex-basis:100%; gap:10px; flex-wrap:wrap;';
 
     input.addEventListener('change', function(){
       if(input.files.length){
@@ -292,16 +300,31 @@ window.enhanceFileInputs = function(){
         link.href = URL.createObjectURL(file);
         link.textContent = file.name;
         link.style.display = 'inline';
+        more.innerHTML = '';
+        if(input.files.length > 1){
+          btn.textContent = '✓ ' + input.files.length + ' files';
+          for(let i = 1; i < input.files.length; i++){
+            const a = document.createElement('a');
+            a.target = '_blank'; a.rel = 'noopener';
+            a.style.cssText = 'font-size:12px; color:#3B6FE0; text-decoration:underline; margin-right:10px;';
+            a.href = URL.createObjectURL(input.files[i]);
+            a.textContent = input.files[i].name;
+            more.appendChild(a);
+          }
+          more.style.display = 'flex';
+        } else { more.style.display = 'none'; }
       } else {
         btn.textContent = 'Upload';
         btn.style.borderColor = '';
         btn.style.color = '';
         link.style.display = 'none';
+        more.style.display = 'none';
       }
     });
 
     wrapper.appendChild(btn);
     wrapper.appendChild(link);
+    wrapper.appendChild(more);
   });
 };
 document.addEventListener('DOMContentLoaded', window.enhanceFileInputs);

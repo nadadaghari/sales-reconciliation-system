@@ -54,7 +54,7 @@
       <thead>
         <tr>
           <th>Submit Request No.</th><th>Date</th><th>Shift</th><th>Submitted By</th>
-          <th>Sales Actual</th><th>Foodics</th><th>Variance</th>
+          <th>Sales Actual</th><th title="Foodics is entered once per day, on the day's last shift">Foodics (day)</th><th>Variance (day)</th>
           <th>Stage</th><th>Note</th><th></th><th></th>
         </tr>
       </thead>
@@ -76,8 +76,8 @@
           <td>Shift {{ row.entry.shift }}</td>
           <td>{% include "salesapp/_submitter.html" with name=row.entry.accountant punch=row.entry.submitted_punch %}</td>
           <td>{{ row.entry.sales_actual }} RO</td>
-          <td>{% if row.entry.expected_foodics %}{{ row.entry.expected_foodics }} RO{% else %}-{% endif %}</td>
-          <td>{% if row.entry.expected_foodics %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.entry.variance }} RO</span>{% else %}-{% endif %}</td>
+          <td>{% if row.day %}{{ row.day.expected_foodics }} RO{% else %}-{% endif %}</td>
+          <td>{% if row.day %}<span style="{% if row.has_issue %}color:#B94A3F; font-weight:700;{% endif %}">{{ row.day_variance }} RO</span>{% else %}-{% endif %}</td>
           <td>
             {% if row.stage == 'complete' %}
               <span class="badge ok">Complete</span>
@@ -382,12 +382,11 @@ function toggleAuditGroup(id){
   </div>
 
   <div class="card" id="stepSalesReviewed">
-    <h3>Sales Review — Reconciliation with Foodics</h3>
+    <h3>Sales Review</h3>
     <div class="grid grid-2">
       <div><label>Sales Actual (auto-calculated)</label><input id="salesActualDisplay" disabled></div>
-      <div><label>Expected from Foodics</label><input id="foodicsInput" name="expected_foodics" type="number" step="0.001" value="{{ selected_entry.expected_foodics }}" class="calc-input"></div>
     </div>
-    <div class="total-strip{% if foodics_flagged %} flag{% endif %}" id="foodicsVarianceStrip" style="margin-top:12px;"><span>Variance (Sales Actual − Foodics)</span><span id="foodicsVarianceDisplay">{% if selected_entry.expected_foodics %}{{ selected_entry.variance }} RO{% else %}—{% endif %}</span></div>
+    <div style="font-size:12px; color:#8A8578; margin-top:8px;">Foodics is compared once per day — see <b>Day Close</b> below, after every shift of the day is approved.</div>
     {% if selected_entry.is_audited %}
       <div class="success-banner" style="margin-top:14px;">Sales review approved{% if review_log %} — by {{ review_log.username_snapshot }} on {{ review_log.created_at|date:"Y-m-d H:i" }}{% endif %}. Fixing a number above and approving again updates it.</div>
     {% endif %}
@@ -395,6 +394,80 @@ function toggleAuditGroup(id){
     <button type="submit" class="btn" style="margin-top:14px;">{% if selected_entry.is_audited %}Re-approve Sales Review{% else %}Approve Sales Review{% endif %}</button>
   </div>
 </form>
+
+{% if day_status %}
+<div class="card" id="dayCloseCard">
+  <h3>Day Close — {{ day_status.branch.name }} · {{ day_status.date }}</h3>
+  <p style="color:#6F6A5C; font-size:13px; margin:0 0 12px; line-height:1.6;">Foodics is reported once for the whole day. Once every shift of the day is approved, enter the day's Foodics figure here and close the day.
+    This branch runs <b>{{ day_status.shifts_per_day }}</b> shift{{ day_status.shifts_per_day|pluralize }} a day (set in Settings).</p>
+  <div style="overflow-x:auto;">
+  <table style="margin:0;">
+    <thead><tr><th>Shift</th><th>Submit Request No.</th><th>Sales Actual</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for r in day_status.rows %}
+      <tr>
+        <td>Shift {{ r.shift }}</td>
+        <td>{% if r.entry %}<a href="?entry_id={{ r.entry.id }}" style="color:#3B6FE0; text-decoration:none;">{{ r.entry.reference_id }}</a>{% else %}—{% endif %}</td>
+        <td>{% if r.entry %}{{ r.entry.sales_actual }} RO{% else %}—{% endif %}</td>
+        <td>
+          {% if r.state == 'approved' %}<span class="badge ok">Approved</span>
+          {% elif r.state == 'waiting' %}<span class="badge flag">Awaiting Sales Review</span>
+          {% else %}<span class="badge flag" style="background:#F0EEE7; color:#8A8578;">Not submitted</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="total-strip" style="margin-top:12px;"><span>Day Sales Actual (all shifts)</span><span id="dayActualDisplay" data-actual="{{ day_status.total_actual|stringformat:'f' }}">{{ day_status.total_actual|floatformat:3 }} RO</span></div>
+
+  {% if day_status.day %}
+  <div class="success-banner" style="margin-top:12px;">Day closed{% if day_status.day.closed_by %} by {{ day_status.day.closed_by.username }}{% endif %} — last saved {{ day_status.day.updated_at|date:"Y-m-d H:i" }}. Fixing a number and closing again updates it.</div>
+  {% endif %}
+
+  {% if not day_status.can_close %}
+  <div style="margin-top:12px; background:#FDF1E3; color:#8A5410; border:1px solid #F0D9B5; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:600;">
+    The day can be closed once every shift is submitted and approved:
+    {% if day_status.missing %} not submitted yet — shift {{ day_status.missing|join:", " }}.{% endif %}
+    {% if day_status.waiting %} waiting for sales review — shift {{ day_status.waiting|join:", " }}.{% endif %}
+  </div>
+  {% endif %}
+
+  {% if day_status.can_close or day_status.day %}
+  <form method="post" style="margin-top:14px;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="close_day">
+    <input type="hidden" name="entry_id" value="{{ selected_entry.id }}">
+    <div class="grid grid-2">
+      <div><label>Expected from Foodics (whole day)</label><input id="dayFoodicsInput" name="day_foodics" type="number" step="0.001" value="{% if day_status.day %}{{ day_status.day.expected_foodics }}{% endif %}" {% if is_viewer or not day_status.can_close %}disabled{% endif %}></div>
+    </div>
+    <div class="total-strip{% if day_flagged %} flag{% endif %}" id="dayVarianceStrip" style="margin-top:12px;"><span>Variance (Day Sales Actual − Foodics)</span><span id="dayVarianceDisplay">{% if day_status.day %}{{ day_status.day.variance|floatformat:3 }} RO{% else %}—{% endif %}</span></div>
+    <div style="margin-top:12px;"><label>Note</label><textarea name="day_note" rows="3" placeholder="Why the day differs from Foodics (if it does)..." {% if is_viewer or not day_status.can_close %}disabled{% endif %}>{% if day_status.day %}{{ day_status.day.note }}{% endif %}</textarea></div>
+    {% if not is_viewer and day_status.can_close %}
+    <button type="submit" class="btn" style="margin-top:14px;">{% if day_status.day %}Re-close Day{% else %}Close Day{% endif %}</button>
+    {% endif %}
+  </form>
+  <script>
+  (function(){
+    const THR = {{ variance_threshold|stringformat:"f" }};
+    const actual = parseFloat(document.getElementById('dayActualDisplay').dataset.actual) || 0;
+    const inp = document.getElementById('dayFoodicsInput');
+    const out = document.getElementById('dayVarianceDisplay');
+    const strip = document.getElementById('dayVarianceStrip');
+    function upd(){
+      const f = parseFloat(inp.value);
+      if(isNaN(f) || inp.value === ''){ out.textContent = '—'; strip.classList.remove('flag'); return; }
+      const v = actual - f;
+      out.textContent = v.toFixed(3) + ' RO';
+      strip.classList.toggle('flag', Math.abs(v) > THR);
+    }
+    inp.addEventListener('input', upd);
+  })();
+  </script>
+  {% endif %}
+</div>
+{% include "salesapp/_history_card.html" with history=day_history title="Day Close History" %}
+{% endif %}
 
 {% include "salesapp/_history_card.html" with history=sales_history title="Sales History" %}
 
@@ -472,18 +545,6 @@ window.calcAll = function(){
   document.getElementById('cashActualDisplay').textContent = (cashTotal - cashCancel).toFixed(3) + ' RO';
   const salesActual = (COLLECTOR_CASH !== null ? COLLECTOR_CASH : cashTotal) + visaTotal;   // cancellations and discount are for confirmation only
   document.getElementById('salesActualDisplay').value = salesActual.toFixed(3);
-
-  const foodics = parseFloat(document.getElementById('foodicsInput').value) || 0;
-  const display = document.getElementById('foodicsVarianceDisplay');
-  const strip = document.getElementById('foodicsVarianceStrip');
-  if(!foodics){
-    display.textContent = '—';
-    strip.classList.remove('flag');
-  } else {
-    const variance = salesActual - foodics;
-    display.textContent = variance.toFixed(3) + ' RO';
-    strip.classList.toggle('flag', Math.abs(variance) > THRESHOLD);
-  }
 };
 
 

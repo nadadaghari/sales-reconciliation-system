@@ -126,12 +126,11 @@
   </div>
 
   <div class="card">
-    <h3>Reconciliation with Foodics</h3>
+    <h3>Totals</h3>
     <div class="grid grid-2">
       <div><label>Actual Total (auto-calculated)</label><input id="actualDisplay" disabled></div>
-      <div><label>Expected from Foodics</label><input name="expected_foodics" type="number" step="0.001" value="{{ entry.expected_foodics }}" class="calc-input" id="expected"></div>
     </div>
-    <div class="total-strip" id="varianceStrip"><span>Variance (Sales Actual − Foodics)</span><span id="varianceDisplay">0.000</span></div>
+    <div style="font-size:12px; color:#8A8578; margin-top:8px;">Foodics is compared once per day, in <b>Day Close</b> on the Audit page.</div>
     <div style="margin-top:12px;">
       <label>Notes</label>
       <textarea name="notes" rows="3" style="max-width:100%;">{{ entry.notes }}</textarea>
@@ -139,6 +138,9 @@
     <div style="margin-top:12px;"><label>Notes Attachment</label>
       {% if entry.notes_attachment %}<div style="margin-bottom:4px;"><a href="{{ entry.notes_attachment.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current</a></div>{% endif %}
       <input type="file" name="notes_attachment" accept="image/*,.pdf">
+      {% for nf in entry.notes_files.all %}<div style="margin-top:4px;"><a href="{{ nf.file.url }}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Close Till Foodics {{ forloop.counter }}</a></div>{% endfor %}
+      <label style="margin-top:8px;">Add Close Till Foodics files</label>
+      <input type="file" name="notes_files" accept="image/*,.pdf" multiple>
     </div>
   </div>
 
@@ -272,14 +274,6 @@ function calcAll(){
   document.getElementById('deliveryActualDisplay').textContent = netDelivery.toFixed(3) + ' RO';
   const actual = netCash + visaTotal + netDelivery;
   document.getElementById('actualDisplay').value = actual.toFixed(3);
-
-  // Daily Sales variance: cash + visa (cancellations and discount do not change it), delivery excluded, vs Foodics.
-  const salesActual = cashTotal + visaTotal;
-  const expected = parseFloat(document.getElementById('expected').value) || 0;
-  const variance = salesActual - expected;
-  document.getElementById('varianceDisplay').textContent = variance.toFixed(3);
-  const strip = document.getElementById('varianceStrip');
-  strip.classList.toggle('flag', Math.abs(variance) > THRESHOLD);
 }
 
 document.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));

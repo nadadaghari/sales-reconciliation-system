@@ -67,14 +67,14 @@
           </button>
         </td>
       </tr>
-      {% if row.entry.notes or row.entry.notes_attachment or row.entry.audit_notes %}
+      {% if row.entry.notes or row.entry.notes_attachment or row.entry.notes_files.exists or row.entry.audit_notes %}
       <tr data-dategroup="{{ row.date_group }}">
         <td colspan="11" style="background:#FAEEDA;">
           <div class="grid grid-2">
             <div>
               <label style="color:#854F0B; font-weight:700;">Waiter</label>
               <div style="color:#1F3B4D; font-size:13px;">{{ row.entry.notes|default:"—" }}</div>
-              {% if row.entry.notes_attachment %}<div style="margin-top:6px;"><a href="{{ row.entry.notes_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 Attachment</a></div>{% endif %}
+              {% if row.entry.notes_attachment %}<div style="margin-top:6px;"><a href="{{ row.entry.notes_attachment.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 Attachment</a></div>{% endif %}{% for nf in row.entry.notes_files.all %}<div style="margin-top:6px;"><a href="{{ nf.file.url }}" target="_blank" style="font-size:13px; color:#3B6FE0;">📎 Close Till Foodics {{ forloop.counter }}</a></div>{% endfor %}
             </div>
             <div>
               <label style="color:#854F0B; font-weight:700;">Audit</label>
