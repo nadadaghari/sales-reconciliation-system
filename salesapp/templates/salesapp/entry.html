@@ -221,22 +221,41 @@
   document.addEventListener('change', e => { if (e.target.matches && e.target.matches('input[data-num]')) clean(e.target); }, true);
   document.addEventListener('blur', e => { if (e.target.matches && e.target.matches('input[data-num]')) { clean(e.target); e.target.dispatchEvent(new Event('input', {bubbles:true})); } }, true);
   document.addEventListener('submit', () => window.cleanNumberFields(), true);
-  // A receipt photo/PDF becomes mandatory as soon as a cancellation or a discount is entered.
-  function syncPhotoRules(){
+  // A receipt photo/PDF becomes mandatory as soon as a cancellation, a discount or a visa amount is entered.
+  // (Checked here, not with the browser's `required`: the real file inputs are hidden behind the Upload buttons,
+  // and a hidden required input makes the browser block the submit without saying why.)
+  function missingReceipts(){
+    const list = [];
     const amt = window.num(document.getElementById('cashCancelAmount').value);
     const ord = (document.querySelector('[name="cash_cancel_order"]').value || '').trim();
-    const cancelFilled = amt > 0 || ord !== '';
     const cf = document.querySelector('[name="cash_cancel_attachment"]');
-    cf.required = cancelFilled;
-    document.getElementById('cancelPhotoHint').style.display = (cancelFilled && !cf.value) ? 'block' : 'none';
+    const cancelMissing = (amt > 0 || ord !== '') && !cf.value;
+    document.getElementById('cancelPhotoHint').style.display = cancelMissing ? 'block' : 'none';
+    if (cancelMissing) list.push(document.getElementById('cancelPhotoHint'));
     let disc = 0;
     document.querySelectorAll('[name="discount_row_amount[]"]').forEach(i => disc += window.num(i.value));
     const df = document.querySelector('[name="discount_attachment"]');
-    df.required = disc > 0;
-    document.getElementById('discountPhotoHint').style.display = (disc > 0 && !df.value) ? 'block' : 'none';
+    const discMissing = disc > 0 && !df.value;
+    document.getElementById('discountPhotoHint').style.display = discMissing ? 'block' : 'none';
+    if (discMissing) list.push(document.getElementById('discountPhotoHint'));
+    document.querySelectorAll('#visaRows .visa-row').forEach(row => {
+      const a = row.querySelector('[name="visa_amount[]"]'), f = row.querySelector('input[type="file"]'), h = row.querySelector('.visa-photo-hint');
+      const miss = a && f && window.num(a.value) > 0 && !f.value;
+      if (h) h.style.display = miss ? 'block' : 'none';
+      if (miss && h) list.push(h);
+    });
+    return list;
   }
-  ['input', 'change'].forEach(ev => document.addEventListener(ev, syncPhotoRules, true));
-  syncPhotoRules();
+  ['input', 'change'].forEach(ev => document.addEventListener(ev, missingReceipts, true));
+  missingReceipts();
+  document.addEventListener('submit', e => {
+    if (e.target.id !== 'entryForm') return;   // never block other forms (e.g. Logout)
+    const list = missingReceipts();
+    if (list.length) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      list[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, true);
 })();
 </script>
 <script>
@@ -265,7 +284,7 @@ function addVisaRow(){
     <input type="hidden" name="visa_row[]" value="${visaCount}">
     <div><label>Machine Serial</label><input name="visa_serial[]" placeholder="Serial"></div>
     <div><label>Amount</label><input type="text" inputmode="decimal" autocomplete="off" data-num="dec" value="0" name="visa_amount[]" class="calc-input"></div>
-    <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_attachment_${visaCount}" accept="image/*,.pdf"></div>
+    <div><label>Receipt (photo/PDF)</label><input type="file" name="visa_attachment_${visaCount}" accept="image/*,.pdf"><div class="visa-photo-hint" style="display:none; font-size:12px; color:#B94A3F; margin-top:4px;">A photo / PDF of the receipt is required because an amount was entered.</div></div>
     <button type="button" class="btn secondary small" onclick="document.getElementById('${id}').remove(); calcAll();">Remove</button>`;
   c.appendChild(row);
   row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));

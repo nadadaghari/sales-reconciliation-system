@@ -215,6 +215,10 @@ class ShiftEntry(models.Model):
     audit_notes = models.TextField(blank=True)
     is_audited = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
+    # A shift the waiter sent for a day that is already closed (or a shift that was already
+    # submitted). It is kept archived (so it counts nowhere) until Audit approves or rejects it.
+    request_status = models.CharField(max_length=10, blank=True, default='')   # '' | pending | approved | rejected
+    request_reason = models.CharField(max_length=120, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     # Snapshot of the numbers exactly as the waiter submitted them — captured

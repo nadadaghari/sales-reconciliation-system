@@ -659,6 +659,11 @@ def _build_visa_rows(entry):
     return rows
 
 
+def _visa_urls(entry):
+    """{serial: receipt url} so the edit forms can link the receipt already on file."""
+    return {vf.serial: vf.file.url for vf in entry.visa_files.all() if vf.file}
+
+
 def _client_ip(request):
     forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
     if forwarded:
@@ -724,8 +729,16 @@ def entry_view(request):
         if int(shift) > _n_shifts:
             messages.error(request, f'This branch works {_n_shifts} shift(s) per day (Settings), so shift {shift} cannot be submitted.')
             return redirect('entry')
-        if ShiftEntry.objects.filter(branch=branch, date=date, shift=shift, is_archived=False).exists():
-            messages.error(request, f'Shift {shift} for {branch.name} on {date} has already been submitted. A shift can only be submitted once; ask Audit if it needs a change.')
+        # A day that is already closed, or a shift that was already submitted: the waiter's
+        # submission is not rejected — it is sent to Audit as a request (kept archived, so it
+        # counts nowhere) and Audit approves or rejects it.
+        request_reason = ''
+        if DayClose.objects.filter(branch=branch, date=date).exists():
+            request_reason = 'Day already closed'
+        elif ShiftEntry.objects.filter(branch=branch, date=date, shift=shift, is_archived=False).exists():
+            request_reason = 'Shift already submitted'
+        if request_reason and ShiftEntry.objects.filter(branch=branch, date=date, shift=shift, request_status='pending').exists():
+            messages.error(request, f'A request for shift {shift} on {date} is already waiting for Audit. Please wait for their decision.')
             return redirect('entry')
 
         cash_counts = {d: _int(request.POST.get(f'denom_{d}', 0)) for d in DENOMS}
@@ -754,6 +767,10 @@ def entry_view(request):
         if _disc_total > 0 and not request.FILES.get('discount_attachment'):
             messages.error(request, 'Please attach the receipt photo for the discount.')
             return redirect('entry')
+        for _vr in visa_rows:
+            if _vr['amount'] > 0 and not _vr['file']:
+                messages.error(request, f'Please attach the receipt photo for visa machine {_vr["serial"] or "(no serial)"}: an amount was entered.')
+                return redirect('entry')
 
         if not _notes_files_ok(request):
             messages.error(request, 'Please upload Close Till Foodics (photo, several photos, or a PDF).')
@@ -778,6 +795,9 @@ def entry_view(request):
             delivery_data=delivery_data,
             notes=request.POST.get('notes', ''),
             # expected_foodics is set later by Audit, not by the waiter.
+            is_archived=bool(request_reason),
+            request_status='pending' if request_reason else '',
+            request_reason=request_reason,
         )
         if request.FILES.get('discount_attachment'):
             entry.staff_discount_attachment = request.FILES['discount_attachment']
@@ -793,6 +813,9 @@ def entry_view(request):
         _save_visa_files(entry, visa_rows)
         _save_notes_files(entry, request)
 
+        if request_reason:
+            messages.warning(request, f'Shift {shift} for {date} is not open for submission ({request_reason.lower()}), so your submission ({entry.reference_id}) was sent to Audit for review. You will see its status in History.')
+            return redirect('entry')
         return redirect(f"/?submitted={entry.reference_id}")
 
     context = {
@@ -1031,6 +1054,65 @@ def collector_view(request):
     return render(request, 'salesapp/collector.html', context)
 
 
+def _approve_all(request, entry):
+    """Approve every shift of this branch/day that is still waiting for sales review, in one
+    go. No numbers are changed (a figure that needs fixing is still corrected on its own
+    shift). The optional note is saved as the Audit note of each shift it approves."""
+    note = request.POST.get('all_note', '').strip()
+    waiting = list(ShiftEntry.objects.filter(branch=entry.branch, date=entry.date, is_archived=False, is_audited=False).order_by('shift'))
+    if not waiting:
+        messages.info(request, 'Every shift of this day is already approved.')
+        return redirect(_reopen_url(request, '/dashboard/', entry.id))
+    for e in waiting:
+        if not e.original_snapshot:
+            e.original_snapshot = _shift_snapshot(e)   # legacy shift: baseline = how it stood before
+        lines = ['Approved with "Approve all shifts". No numbers changed.']
+        if note:
+            if e.audit_notes and note not in e.audit_notes:
+                e.audit_notes = f'{e.audit_notes}\n{note}'
+            elif not e.audit_notes:
+                e.audit_notes = note
+            lines.append(f'Note: "{note}"')
+        e.is_audited = True
+        e.save()
+        log_activity(request, 'entry_audited', description=e.reference_id, details='\n'.join(lines))
+    refs = ', '.join(e.reference_id for e in waiting)
+    messages.success(request, f'Approved {len(waiting)} shift(s): {refs}.')
+    return redirect(_reopen_url(request, '/dashboard/', entry.id))
+
+
+def _decide_request(request, entry):
+    """Audit's decision on a waiter's request (a shift sent for a closed day or for a shift
+    that was already submitted). Approve: the shift goes live (replacing any live shift with
+    the same number, which is archived). Reject: it stays archived."""
+    if entry.request_status != 'pending':
+        messages.error(request, 'This request was already decided.')
+        return redirect(f'/dashboard/?entry_id={entry.id}')
+    decision = request.POST.get('decision')
+    if decision == 'approve':
+        replaced = list(ShiftEntry.objects.filter(branch=entry.branch, date=entry.date, shift=entry.shift, is_archived=False).exclude(pk=entry.pk))
+        for old in replaced:
+            old.is_archived = True
+            old.save(update_fields=['is_archived'])
+        entry.is_archived = False
+        entry.request_status = 'approved'
+        entry.is_audited = False   # it still needs the normal Audit review (and a re-close of the day)
+        entry.save()
+        note = f' replacing {", ".join(o.reference_id for o in replaced)}' if replaced else ''
+        log_activity(request, 'entry_unarchived', description=entry.reference_id,
+                     details=f'Waiter request approved ({entry.request_reason}){note}')
+        messages.success(request, f'Request {entry.reference_id} approved{note}. Review the shift again and re-close the day.')
+    elif decision == 'reject':
+        entry.request_status = 'rejected'
+        entry.save(update_fields=['request_status'])
+        log_activity(request, 'entry_archived', description=entry.reference_id,
+                     details=f'Waiter request rejected ({entry.request_reason})')
+        messages.success(request, f'Request {entry.reference_id} rejected.')
+    else:
+        messages.error(request, 'Please choose approve or reject.')
+    return redirect(f'/dashboard/?entry_id={entry.id}')
+
+
 @role_required('audit', 'manager', 'admin')
 def dashboard_view(request):
     """The single Audit workspace. Every shift moves through four stages —
@@ -1048,6 +1130,13 @@ def dashboard_view(request):
         entry = get_object_or_404(ShiftEntry, id=entry_id)
         if request.POST.get('action') == 'close_day':
             return _close_day(request, entry)
+        if request.POST.get('action') == 'request_decision':
+            return _decide_request(request, entry)
+        if request.POST.get('action') == 'approve_all':
+            return _approve_all(request, entry)
+        if entry.request_status == 'pending':
+            messages.error(request, 'This is a waiter request. Approve or reject it first.')
+            return redirect(f'/dashboard/?entry_id={entry.id}')
         before_snap = _shift_snapshot(entry)
         if not entry.original_snapshot:
             entry.original_snapshot = before_snap   # legacy shift: baseline = how it stood before this edit
@@ -1236,6 +1325,7 @@ def dashboard_view(request):
         'day_status': day_status,
         'day_history': day_history,
         'day_flagged': day_flagged,
+        'pending_requests': list(ShiftEntry.objects.select_related('branch').filter(request_status='pending').order_by('created_at')),
         'branch_groups': branch_groups,
         'shift_filter': shift_filter,
         'shift_choices': SHIFT_CHOICES,
@@ -1255,6 +1345,7 @@ def dashboard_view(request):
         'selected_has_difference': selected_has_difference,
         'entry_denoms': entry_denoms,
         'entry_aed_denoms': entry_aed_denoms,
+        'visa_urls': _visa_urls(selected_entry) if selected_entry else {},
         'entry_visa_rows': entry_visa_rows,
         'handover_denoms': handover_denoms,
         'handover_aed_denoms': handover_aed_denoms,
@@ -2168,6 +2259,7 @@ def edit_entry_view(request, entry_id):
         'active_tab': 'dashboard',
         'next_url': _safe_next(request),
         'selected_entry': entry,
+        'visa_urls': _visa_urls(entry),
     }
     return render(request, 'salesapp/edit_entry.html', context)
 
@@ -2349,6 +2441,9 @@ def unlock_user_view(request, user_id):
 @require_POST
 def archive_entry_view(request, entry_id):
     entry = get_object_or_404(ShiftEntry, id=entry_id)
+    if entry.request_status in ('pending', 'rejected'):
+        messages.error(request, 'This is a waiter request. Decide it from the Audit dashboard.')
+        return redirect('dashboard')
     entry.is_archived = not entry.is_archived
     entry.save(update_fields=['is_archived'])
     state = 'archived' if entry.is_archived else 'unarchived'
@@ -2361,7 +2456,7 @@ def archive_entry_view(request, entry_id):
 @role_required('collector', 'audit', 'admin')
 def archive_history_view(request):
     """Shows archived (removed-from-view) entries, grouped by branch, with an Unarchive action."""
-    qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=True).order_by('-created_at')
+    qs = ShiftEntry.objects.select_related('branch', 'collector').filter(is_archived=True).exclude(request_status__in=['pending', 'rejected']).order_by('-created_at')
 
     branch_filter = request.GET.get('branch_filter', '').strip()
     date_filter = request.GET.get('date_filter', '').strip()
@@ -2439,6 +2534,7 @@ def waiter_history_view(request):
         'date_group_count': date_group + 1,
         'date_from': date_from,
         'date_to': date_to,
+        'my_requests': list(ShiftEntry.objects.filter(branch=branch).exclude(request_status='').order_by('-created_at')[:15]),
         'active_tab': 'waiter_history',
     }
     return render(request, 'salesapp/waiter_history.html', context)

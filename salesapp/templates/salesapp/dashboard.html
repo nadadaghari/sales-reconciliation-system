@@ -3,6 +3,22 @@
 {% block content %}
 <style>input[readonly]{background:#F3F1EA !important; color:#6F6A5C; cursor:not-allowed;}</style>
 
+{% if pending_requests %}
+<div class="card" style="background:#FAEEDA; border:1px solid #E8C98A;">
+  <h3 style="color:#854F0B;">Waiter requests · {{ pending_requests|length }} waiting</h3>
+  <p style="color:#854F0B; font-size:13px; margin-top:0;">Shifts a waiter sent for a closed day, or for a shift that was already submitted. Open one to approve or reject it.</p>
+  <table>
+    <thead><tr><th>Request No.</th><th>Branch</th><th>Date</th><th>Shift</th><th>By</th><th>Reason</th><th>Sent</th><th></th></tr></thead>
+    <tbody>
+    {% for r in pending_requests %}
+      <tr><td>{{ r.reference_id }}</td><td>{{ r.branch.name }}</td><td>{{ r.date }}</td><td>{{ r.get_shift_display }}</td><td>{{ r.accountant }}</td><td>{{ r.request_reason }}</td><td>{{ r.created_at|date:"d M H:i" }}</td>
+        <td><a href="?entry_id={{ r.id }}" class="btn small" style="text-decoration:none;">Review</a></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <div class="card">
   <h3>All Entries</h3>
   <form method="get">
@@ -201,6 +217,23 @@ function toggleAuditGroup(id){
 }
 </script>
 
+{% if selected_entry and selected_entry.request_status == 'pending' %}
+<div class="card" style="background:#FAEEDA; border:2px solid #E8C98A;">
+  <h3 style="color:#854F0B;">Waiter request · {{ selected_entry.request_reason }}</h3>
+  <p style="color:#854F0B; font-size:13px; margin-top:0;">{{ selected_entry.accountant }} sent {{ selected_entry.get_shift_display }} for {{ selected_entry.date }} after it was no longer open. It counts nowhere until you decide. Approving makes it the live shift (a live shift with the same number is archived) and the day needs a re-close.</p>
+  {% if not is_viewer %}
+  <form method="post" style="display:flex; gap:10px; flex-wrap:wrap;">
+    {% csrf_token %}
+    <input type="hidden" name="entry_id" value="{{ selected_entry.id }}">
+    <input type="hidden" name="action" value="request_decision">
+    <button type="submit" name="decision" value="approve" class="btn">Approve</button>
+    <button type="submit" name="decision" value="reject" class="btn secondary">Reject</button>
+  </form>
+  {% endif %}
+</div>
+{% elif selected_entry and selected_entry.request_status == 'rejected' %}
+<div class="card" style="background:#FBE9E6;"><strong style="color:#B94A3F;">This waiter request was rejected.</strong></div>
+{% endif %}
 {% if selected_entry %}
 <div class="modal-overlay">
 <div class="modal-box">
@@ -381,6 +414,11 @@ function toggleAuditGroup(id){
     <div class="total-strip" style="margin-top:6px;"><span>Delivery Actual Amount (after cancellation)</span><span id="deliveryActualDisplay">0.000 RO</span></div>
   </div>
 
+  <div class="card" id="totalsBeforeReview">
+    <div class="total-strip"><span>Total without Discount (Cash + Visa)</span><span id="totalNoDiscountDisplay">0.000 RO</span></div>
+    <div class="total-strip" style="margin-top:6px;"><span>Total with Discount (information only)</span><span id="totalWithDiscountDisplay">0.000 RO</span></div>
+  </div>
+
   <div class="card" id="stepSalesReviewed">
     <h3>Sales Review</h3>
     <div class="grid grid-2">
@@ -402,13 +440,14 @@ function toggleAuditGroup(id){
     This branch runs <b>{{ day_status.shifts_per_day }}</b> shift{{ day_status.shifts_per_day|pluralize }} a day (set in Settings).</p>
   <div style="overflow-x:auto;">
   <table style="margin:0;">
-    <thead><tr><th>Shift</th><th>Submit Request No.</th><th>Sales Actual</th><th>Status</th></tr></thead>
+    <thead><tr><th>Shift</th><th>Submit Request No.</th><th>Sales Actual</th><th>Waiter note</th><th>Status</th></tr></thead>
     <tbody>
       {% for r in day_status.rows %}
       <tr>
         <td>Shift {{ r.shift }}</td>
         <td>{% if r.entry %}<a href="?entry_id={{ r.entry.id }}" style="color:#3B6FE0; text-decoration:none;">{{ r.entry.reference_id }}</a>{% else %}—{% endif %}</td>
         <td>{% if r.entry %}{{ r.entry.sales_actual }} RO{% else %}—{% endif %}</td>
+        <td style="max-width:260px; font-size:12px; color:#1F3B4D;">{% if r.entry %}{{ r.entry.notes|default:"—"|truncatechars:80 }}{% if r.entry.notes_files.exists or r.entry.notes_attachment %} <span title="Has Close Till Foodics / attachment">📎</span>{% endif %}{% else %}—{% endif %}</td>
         <td>
           {% if r.state == 'approved' %}<span class="badge ok">Approved</span>
           {% elif r.state == 'waiting' %}<span class="badge flag">Awaiting Sales Review</span>
@@ -420,6 +459,54 @@ function toggleAuditGroup(id){
   </table>
   </div>
   <div class="total-strip" style="margin-top:12px;"><span>Day Sales Actual (all shifts)</span><span id="dayActualDisplay" data-actual="{{ day_status.total_actual|stringformat:'f' }}">{{ day_status.total_actual|floatformat:3 }} RO</span></div>
+
+  {% if day_status.waiting and not is_viewer %}
+  <form method="post" id="approveAllForm" style="margin-top:14px; background:#F5F3EC; border:1px solid #E7E4DB; border-radius:10px; padding:14px;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="approve_all">
+    <input type="hidden" name="entry_id" value="{{ selected_entry.id }}">
+    <label>Note for all shifts (optional)</label>
+    <textarea name="all_note" rows="2" placeholder="Saved as the Audit note of every shift approved here..." style="max-width:100%;"></textarea>
+    <button type="button" class="btn" id="approveAllBtn" style="margin-top:10px;">Approve all shifts ({{ day_status.waiting|length }})</button>
+    <div style="font-size:12px; color:#6F6A5C; margin-top:6px;">Approves every shift of this day that is waiting for review, as it is now. To fix a figure, open that shift and approve it there.</div>
+  </form>
+  <style>
+    .aa-modal { position:fixed; inset:0; z-index:1000; background:rgba(28,25,23,.55); display:none; align-items:center; justify-content:center; padding:20px; }
+    .aa-modal.open { display:flex; }
+    .aa-box { background:#fff; border-radius:18px; max-width:460px; width:100%; padding:26px 26px 22px; box-shadow:0 18px 50px rgba(0,0,0,.25); text-align:left; }
+    .aa-box h3 { margin:0 0 12px; font-size:19px; color:#1F3B4D; }
+    .aa-box p { margin:0 0 10px; font-size:14px; line-height:1.6; color:#3D3A31; }
+    .aa-meta { background:#F5F3EC; border-radius:10px; padding:10px 14px; margin:0 0 12px; font-size:14px; color:#1F3B4D; }
+    .aa-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+  </style>
+  <div id="approveAllModal" class="aa-modal" role="dialog" aria-modal="true" aria-labelledby="aaTitle">
+    <div class="aa-box">
+      <h3 id="aaTitle">Approve all shifts?</h3>
+      <div class="aa-meta"><b>{{ day_status.branch.name }}</b> · {{ day_status.date }}<br>Shift {{ day_status.waiting|join:", " }}</div>
+      <p>Each shift is approved as it is now, and logged as approved.</p>
+      <p style="color:#6F6A5C; font-size:13px;">You can still open a shift, edit it and approve it again later.</p>
+      <div class="aa-actions">
+        <button type="button" class="btn secondary" id="aaCancel">Cancel</button>
+        <button type="button" class="btn" id="aaConfirm">Approve all</button>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    const modal = document.getElementById('approveAllModal'), form = document.getElementById('approveAllForm');
+    const open = document.getElementById('approveAllBtn'), cancel = document.getElementById('aaCancel'), ok = document.getElementById('aaConfirm');
+    if(!modal || !form || !open) return;
+    let last = null;
+    function show(){ last = document.activeElement; modal.classList.add('open'); cancel.focus(); }
+    function hide(){ modal.classList.remove('open'); if(last && last.focus) last.focus(); }
+    open.addEventListener('click', show);
+    cancel.addEventListener('click', hide);
+    modal.addEventListener('click', e => { if(e.target === modal) hide(); });
+    document.addEventListener('keydown', e => { if(e.key === 'Escape' && modal.classList.contains('open')) hide(); });
+    ok.addEventListener('click', () => { ok.disabled = true; form.submit(); });
+  })();
+  </script>
+  {% endif %}
 
   {% if day_status.day %}
   <div class="success-banner" style="margin-top:12px;">Day closed{% if day_status.day.closed_by %} by {{ day_status.day.closed_by.username }}{% endif %} — last saved {{ day_status.day.updated_at|date:"Y-m-d H:i" }}. Fixing a number and closing again updates it.</div>
@@ -476,6 +563,7 @@ function toggleAuditGroup(id){
 {{ selected_entry.cash_counts|json_script:"existingCashCounts" }}
 {{ selected_entry.cash_counts_aed|json_script:"existingCashCountsAed" }}
 {{ selected_entry.visa_entries|json_script:"existingVisaEntries" }}
+{{ visa_urls|json_script:"visaUrls" }}
 {{ selected_entry.delivery_data|json_script:"existingDeliveryData" }}
 
 <script>
@@ -490,6 +578,7 @@ let visaCount = 0;
 const existingCashCounts = JSON.parse(document.getElementById('existingCashCounts').textContent);
 const existingCashCountsAed = JSON.parse(document.getElementById('existingCashCountsAed').textContent);
 const existingVisaEntries = JSON.parse(document.getElementById('existingVisaEntries').textContent);
+const visaUrls = JSON.parse(document.getElementById('visaUrls').textContent || '{}');
 const existingDeliveryData = JSON.parse(document.getElementById('existingDeliveryData').textContent);
 
 DENOMS.forEach(d => {
@@ -545,6 +634,9 @@ window.calcAll = function(){
   document.getElementById('cashActualDisplay').textContent = (cashTotal - cashCancel).toFixed(3) + ' RO';
   const salesActual = (COLLECTOR_CASH !== null ? COLLECTOR_CASH : cashTotal) + visaTotal;   // cancellations and discount are for confirmation only
   document.getElementById('salesActualDisplay').value = salesActual.toFixed(3);
+  const discountNow = parseFloat(document.getElementById('discountTotalInput').value) || 0;   // information only — not deducted from the totals
+  document.getElementById('totalNoDiscountDisplay').textContent = salesActual.toFixed(3) + ' RO';
+  document.getElementById('totalWithDiscountDisplay').textContent = (salesActual - discountNow).toFixed(3) + ' RO';
 };
 
 
@@ -587,7 +679,7 @@ window.addVisaRow = function(serial = '', amount = ''){
     <input type="hidden" name="visa_row[]" value="${visaCount}">
     <div><label>Machine Serial</label><input name="visa_serial[]" placeholder="Serial" value="${serial}"></div>
     <div><label>Amount${VISA_AUDITED ? VISA_AUDITED_BADGE : ''}</label><input type="number" step="0.001" name="visa_amount[]" value="${amount}" class="calc-input"></div>
-    <div><label>New Receipt (optional)</label><input type="file" name="visa_attachment_${visaCount}" accept="image/*,.pdf"></div>
+    <div><label>New Receipt (optional)</label>${visaUrls[serial] ? `<div style="margin-bottom:4px;"><a href="${visaUrls[serial]}" target="_blank" style="font-size:12px; color:#3B6FE0;">📎 Current receipt</a></div>` : ''}<input type="file" name="visa_attachment_${visaCount}" accept="image/*,.pdf"></div>
     <button type="button" class="btn secondary small" onclick="document.getElementById('${id}').remove(); calcAll();">Remove</button>`;
   c.appendChild(row);
   row.querySelectorAll('.calc-input').forEach(inp => inp.addEventListener('input', calcAll));
