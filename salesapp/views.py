@@ -3,8 +3,12 @@ import unicodedata
 import csv
 import datetime
 import io
+import logging
+import sys
 from urllib.parse import urlencode, quote
 from decimal import Decimal, InvalidOperation
+
+logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.contrib import messages
@@ -665,10 +669,29 @@ def _visa_urls(entry):
 
 
 def _client_ip(request):
+    """Best-effort client IP. Returns None if missing/invalid so ActivityLog
+    never 500s on a bad X-Forwarded-For value from nginx/proxy."""
+    candidates = []
     forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
     if forwarded:
-        return forwarded.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
+        candidates.append(forwarded.split(',')[0].strip())
+    remote = request.META.get('REMOTE_ADDR')
+    if remote:
+        candidates.append(remote.strip())
+    for ip in candidates:
+        if not ip:
+            continue
+        # Strip optional :port on IPv4 (some proxies send it).
+        if ip.count('.') == 3 and ip.rsplit(':', 1)[-1].isdigit():
+            ip = ip.rsplit(':', 1)[0]
+        try:
+            from django.core.exceptions import ValidationError
+            from django.core.validators import validate_ipv46_address
+            validate_ipv46_address(ip)
+            return ip
+        except (ValidationError, ValueError):
+            continue
+    return None
 
 
 def log_activity(request, action, description='', user=None, username_override=None, details=''):
@@ -679,14 +702,18 @@ def log_activity(request, action, description='', user=None, username_override=N
     human-readable summary of what actually changed, shown in Audit History."""
     actor = user or (request.user if request.user.is_authenticated else None)
     snapshot = username_override or (actor.username if actor else '')
-    ActivityLog.objects.create(
-        user=actor,
-        username_snapshot=snapshot,
-        action=action,
-        description=description[:255],
-        details=details,
-        ip_address=_client_ip(request),
-    )
+    try:
+        ActivityLog.objects.create(
+            user=actor,
+            username_snapshot=snapshot,
+            action=action,
+            description=description[:255],
+            details=details,
+            ip_address=_client_ip(request),
+        )
+    except Exception:
+        # Never let audit logging break the user-facing action (e.g. CSV import).
+        pass
 
 
 @role_required('waiter', 'admin')
@@ -1505,6 +1532,16 @@ def import_branches_view(request):
         messages.error(request, 'Please choose a file.')
         return redirect('add_branch')
 
+    try:
+        return _import_branches_from_upload(request, upload)
+    except Exception as exc:
+        # Never 500 the admin UI — show the real cause and log the traceback.
+        logger.exception('Branch CSV/XLSX import failed')
+        messages.error(request, f'Import failed: {type(exc).__name__}: {exc}')
+        return redirect('add_branch')
+
+
+def _import_branches_from_upload(request, upload):
     filename = (upload.name or '').lower()
     rows = []
 
@@ -1537,6 +1574,8 @@ def import_branches_view(request):
             rows.append(row)
     else:
         raw_bytes = upload.read()
+        # NUL bytes make Python's csv module raise and 500 the request.
+        raw_bytes = raw_bytes.replace(b'\x00', b'')
         decoded = None
         for encoding in ('utf-8-sig', 'utf-16', 'cp1256', 'cp1252', 'latin-1'):
             try:
@@ -1548,14 +1587,25 @@ def import_branches_view(request):
             messages.error(request, 'Could not read the file — unrecognized text encoding. Try re-saving it as "CSV UTF-8" from Excel.')
             return redirect('add_branch')
 
+        # Spreadsheet exports sometimes put huge unused cells in a row.
+        csv.field_size_limit(min(10 * 1024 * 1024, sys.maxsize))
+
         try:
-            dialect = csv.Sniffer().sniff(decoded[:2048], delimiters=',\t;')
+            sample = decoded[:4096]
+            dialect = csv.Sniffer().sniff(sample, delimiters=',\t;') if sample.strip() else csv.excel
         except csv.Error:
             dialect = csv.excel  # comma-separated fallback
 
-        reader = csv.DictReader(io.StringIO(decoded), dialect=dialect)
-        fieldnames = reader.fieldnames or []
-        rows = list(reader)
+        try:
+            reader = csv.DictReader(io.StringIO(decoded), dialect=dialect)
+            fieldnames = list(reader.fieldnames or [])
+            rows = list(reader)
+        except csv.Error as exc:
+            messages.error(
+                request,
+                f'Could not parse that CSV ({exc}). Re-save it from Excel as "CSV UTF-8" and try again.'
+            )
+            return redirect('add_branch')
 
     name_col = _find_column(fieldnames, NAME_COLUMN_CANDIDATES)
     code_col = _find_column(fieldnames, CODE_COLUMN_CANDIDATES)
@@ -1581,6 +1631,12 @@ def import_branches_view(request):
             else:
                 blank += 1
             continue
+        if len(name) > 120:
+            skipped.append((line_no, f'{name[:40]}…', 'name longer than 120 characters'))
+            continue
+        if code and len(code) > 20:
+            skipped.append((line_no, name, f'code "{code}" longer than 20 characters'))
+            continue
         nkey, ckey = _norm_branch_name(name), _norm_branch_code(code)
         if nkey in names:
             skipped.append((line_no, name, f'name already exists ("{names[nkey]}")'))
@@ -1588,7 +1644,13 @@ def import_branches_view(request):
         if ckey and ckey in codes:
             skipped.append((line_no, name, f'code "{code}" already used by "{codes[ckey]}"'))
             continue
-        Branch.objects.create(name=name, code=code or None)
+        try:
+            Branch.objects.create(name=name, code=code or None)
+        except Exception as exc:
+            # Unique constraint or any other DB rejection — skip the row
+            # instead of failing the whole upload.
+            skipped.append((line_no, name, f'could not save ({exc})'))
+            continue
         names[nkey] = name
         if ckey:
             codes[ckey] = name
