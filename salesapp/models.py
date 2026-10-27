@@ -214,6 +214,12 @@ class ShiftEntry(models.Model):
     notes_attachment = models.FileField(upload_to='notes_attachments/%Y/%m/', blank=True, null=True)
     audit_notes = models.TextField(blank=True)
     is_audited = models.BooleanField(default=False)
+    # The collector's own sign-off on the shift (separate from Audit's review): he checks the
+    # shift and approves it, one by one or all of the day's shifts at once, with an optional note.
+    collector_approved = models.BooleanField(default=False)
+    collector_approved_at = models.DateTimeField(null=True, blank=True)
+    collector_approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    collector_note = models.TextField(blank=True)
     is_archived = models.BooleanField(default=False)
     # A shift the waiter sent for a day that is already closed (or a shift that was already
     # submitted). It is kept archived (so it counts nowhere) until Audit approves or rejects it.
@@ -480,6 +486,7 @@ class ActivityLog(models.Model):
         ('entry_unarchived', 'Shift Entry Unarchived'),
         ('handover_saved', 'Cash Collected'),
         ('entry_audited', 'Daily Sales Reviewed'),
+        ('collector_approved', 'Collector Approved'),
         ('day_closed', 'Day Closed'),
         ('cash_reconciled', 'Cash Reconciled'),
     ]

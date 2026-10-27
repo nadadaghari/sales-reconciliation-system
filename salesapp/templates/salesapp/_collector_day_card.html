@@ -1,0 +1,66 @@
+{% if collector_day %}
+<div class="card" id="collectorDayCard">
+  <h3>Day Handover — {{ collector_day.branch.name }} · {{ collector_day.date }}</h3>
+  <p style="color:#6F6A5C; font-size:13px; margin:0 0 12px; line-height:1.6;">Check the shifts of the day, then{% if can_approve %} approve the handover of all of them at once, with the cash proof and a note{% else %} see whether the collector approved them{% endif %}. Nothing is changed by approving.
+    This branch runs <b>{{ collector_day.shifts_per_day }}</b> shift{{ collector_day.shifts_per_day|pluralize }} a day.</p>
+  <div style="overflow-x:auto;">
+  <table style="margin:0;">
+    <thead><tr><th>Shift</th><th>Submit Request No.</th><th>Cash</th><th>Counted</th><th>Waiter note</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for r in collector_day.rows %}
+      <tr {% if r.entry and r.entry.id == selected_entry.id %}style="background:#F7F5EE;"{% endif %}>
+        <td>Shift {{ r.shift }}</td>
+        <td>{% if r.entry %}<a href="?entry_id={{ r.entry.id }}" style="color:#3B6FE0; text-decoration:none;">{{ r.entry.reference_id }}</a>{% else %}—{% endif %}</td>
+        <td>{% if r.entry %}{{ r.entry.final_cash_total|floatformat:3 }}{% else %}—{% endif %}</td>
+        <td>{% if r.entry %}{% if r.counted %}<span class="badge ok" style="background:#E6F1FB; color:#185FA5;">Counted</span>{% else %}<span class="badge flag">Not counted</span>{% endif %}{% else %}—{% endif %}</td>
+        <td style="max-width:220px; font-size:12px; color:#1F3B4D;">{% if r.entry %}{{ r.entry.notes|default:"—"|truncatechars:60 }}{% else %}—{% endif %}</td>
+        <td>
+          {% if r.state == 'approved' %}<span class="badge ok">Approved</span>
+          {% elif r.state == 'waiting' %}<span class="badge flag">Waiting</span>
+          {% else %}<span class="badge flag" style="background:#F0EEE7; color:#8A8578;">Not submitted</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="total-strip" style="margin-top:12px;"><span>Day Cash (all shifts)</span><span>{{ collector_day.total_cash|floatformat:3 }} RO</span></div>
+
+  {% if can_approve and collector_day.waiting %}
+  <form method="post" id="colApproveAllForm" enctype="multipart/form-data" style="margin-top:14px; background:#F5F3EC; border:1px solid #E7E4DB; border-radius:10px; padding:14px;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="collector_approve_all">
+    <input type="hidden" name="shift_entry_id" value="{{ selected_entry.id }}">
+    <label>Cash Proof (photo of the cash invoice) {% if collector_day.needs_proof %}<span style="color:#B94A3F;">*</span>{% endif %}</label>
+    <input type="file" name="proof_attachment" accept="image/*,.pdf" {% if collector_day.needs_proof %}required{% endif %}>
+    <label style="margin-top:10px;">Note (optional)</label>
+    <textarea name="approve_note" id="colApproveNote" rows="2" placeholder="Saved with every shift approved here..." style="max-width:100%;"></textarea>
+    <button type="button" class="btn" id="colApproveAllBtn" style="margin-top:10px;">Approve Handover ({{ collector_day.waiting|length }})</button>
+    <div style="font-size:12px; color:#6F6A5C; margin-top:6px;">Approving saves every waiting shift as collected, with the waiter's cash counts as they are now, and sends it to Audit. A shift you already counted keeps your count.</div>
+  </form>
+  <div id="colApproveModal" style="position:fixed; inset:0; z-index:1000; background:rgba(28,25,23,.55); display:none; align-items:center; justify-content:center; padding:20px;">
+    <div style="background:#fff; border-radius:18px; max-width:460px; width:100%; padding:26px 26px 22px; box-shadow:0 18px 50px rgba(0,0,0,.25);">
+      <h3 style="margin:0 0 12px; font-size:19px; color:#1F3B4D;">Approve Handover?</h3>
+      <div style="background:#F5F3EC; border-radius:10px; padding:10px 14px; margin:0 0 12px; font-size:14px; color:#1F3B4D;"><b>{{ collector_day.branch.name }}</b> · {{ collector_day.date }}<br>{{ collector_day.waiting|length }} shift(s) waiting</div>
+      <p style="margin:0 0 10px; font-size:14px; line-height:1.6; color:#3D3A31;">These shifts are saved as collected (handover) with the cash counts as they are now, and move on to Audit.</p>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:18px;">
+        <button type="button" class="btn secondary" id="colApproveCancel">Cancel</button>
+        <button type="button" class="btn" id="colApproveOk">Approve Handover</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+<script>
+(function(){
+  const modal = document.getElementById('colApproveModal'), form = document.getElementById('colApproveAllForm');
+  const open = document.getElementById('colApproveAllBtn'), cancel = document.getElementById('colApproveCancel'), ok = document.getElementById('colApproveOk');
+  if (!modal || !form || !open) return;
+  const show = () => { modal.style.display = 'flex'; cancel.focus(); }, hide = () => { modal.style.display = 'none'; open.focus(); };
+  open.addEventListener('click', show); cancel.addEventListener('click', hide);
+  modal.addEventListener('click', e => { if (e.target === modal) hide(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && modal.style.display === 'flex') hide(); });
+  ok.addEventListener('click', () => { ok.disabled = true; form.submit(); });
+})();
+</script>
+{% endif %}

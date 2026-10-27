@@ -3,12 +3,8 @@ import unicodedata
 import csv
 import datetime
 import io
-import logging
-import sys
 from urllib.parse import urlencode, quote
 from decimal import Decimal, InvalidOperation
-
-logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.contrib import messages
@@ -669,29 +665,10 @@ def _visa_urls(entry):
 
 
 def _client_ip(request):
-    """Best-effort client IP. Returns None if missing/invalid so ActivityLog
-    never 500s on a bad X-Forwarded-For value from nginx/proxy."""
-    candidates = []
     forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
     if forwarded:
-        candidates.append(forwarded.split(',')[0].strip())
-    remote = request.META.get('REMOTE_ADDR')
-    if remote:
-        candidates.append(remote.strip())
-    for ip in candidates:
-        if not ip:
-            continue
-        # Strip optional :port on IPv4 (some proxies send it).
-        if ip.count('.') == 3 and ip.rsplit(':', 1)[-1].isdigit():
-            ip = ip.rsplit(':', 1)[0]
-        try:
-            from django.core.exceptions import ValidationError
-            from django.core.validators import validate_ipv46_address
-            validate_ipv46_address(ip)
-            return ip
-        except (ValidationError, ValueError):
-            continue
-    return None
+        return forwarded.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
 
 
 def log_activity(request, action, description='', user=None, username_override=None, details=''):
@@ -702,18 +679,14 @@ def log_activity(request, action, description='', user=None, username_override=N
     human-readable summary of what actually changed, shown in Audit History."""
     actor = user or (request.user if request.user.is_authenticated else None)
     snapshot = username_override or (actor.username if actor else '')
-    try:
-        ActivityLog.objects.create(
-            user=actor,
-            username_snapshot=snapshot,
-            action=action,
-            description=description[:255],
-            details=details,
-            ip_address=_client_ip(request),
-        )
-    except Exception:
-        # Never let audit logging break the user-facing action (e.g. CSV import).
-        pass
+    ActivityLog.objects.create(
+        user=actor,
+        username_snapshot=snapshot,
+        action=action,
+        description=description[:255],
+        details=details,
+        ip_address=_client_ip(request),
+    )
 
 
 @role_required('waiter', 'admin')
@@ -866,12 +839,103 @@ def entry_view(request):
     return render(request, 'salesapp/entry.html', context)
 
 
+def _collector_day_rows(entry):
+    """The shifts of the opened shift's branch/day, as the collector's approval card shows them."""
+    branch = entry.branch
+    entries = list(ShiftEntry.objects.filter(branch=branch, date=entry.date, is_archived=False)
+                   .select_related('collector').order_by('shift'))
+    by_shift = {}
+    for e in entries:
+        by_shift.setdefault(str(e.shift), e)
+    wanted = [str(n) for n in range(1, max(int(branch.shifts_per_day or 1), 1) + 1)]
+    rows = []
+    for sh in wanted + sorted(k for k in by_shift if k not in wanted):
+        e = by_shift.get(sh)
+        counted = bool(e is not None and getattr(e, 'collector', None) is not None)
+        # Approved only once the handover is really saved (a bare flag from an older build does not count).
+        rows.append({'shift': sh, 'entry': e,
+                     'state': 'missing' if e is None else ('approved' if (e.collector_approved and counted) else 'waiting'),
+                     'counted': counted})
+    waiting = [r['entry'] for r in rows if r['state'] == 'waiting']
+    return {'branch': branch, 'date': entry.date, 'rows': rows, 'waiting': waiting,
+            'shifts_per_day': len(wanted),
+            'needs_proof': any(r['state'] == 'waiting' and not r['counted'] for r in rows),
+            'total_cash': sum((e.final_cash_total for e in entries), Decimal('0')),
+            'approved_n': sum(1 for r in rows if r['state'] == 'approved')}
+
+
+def _collector_approve(request):
+    """'Approve all shifts' on the collector's day card = Save Handover for the whole day: every
+    shift of the day that has no collector count yet is saved as collected, with the waiter's
+    cash counts as they are (the collector confirms they are correct), the one cash-proof photo
+    and the note. A shift he already counted himself keeps his own count and is just marked
+    approved. Each shift then moves on to Audit's cash reconciliation."""
+    if request.user.profile.role not in ('collector', 'admin'):
+        raise PermissionDenied('Only the collector can approve shifts here.')
+    entry = get_object_or_404(ShiftEntry, id=request.POST.get('shift_entry_id'), is_archived=False)
+    back = redirect(_safe_next(request) or _reopen_url(request, '/collector/', entry.id))
+    note = (request.POST.get('approve_note') or '').strip()
+    targets = list(ShiftEntry.objects.filter(branch=entry.branch, date=entry.date, is_archived=False)
+                   .filter(Q(collector_approved=False) | Q(collector__isnull=True))
+                   .select_related('collector').order_by('shift'))
+    if not targets:
+        messages.info(request, 'Nothing to approve: every shift of this day is already approved.')
+        return back
+    needs_count = [e for e in targets if getattr(e, 'collector', None) is None]
+    proof = request.FILES.get('proof_attachment')
+    proof_bytes = None
+    if proof:
+        ext = proof.name.rsplit('.', 1)[-1].lower() if '.' in proof.name else ''
+        if ext not in ('jpg', 'jpeg', 'png', 'webp', 'heic', 'pdf') or proof.size > 10 * 1024 * 1024:
+            messages.error(request, 'Cash proof must be a photo (JPG/PNG/WEBP/HEIC) or PDF, up to 10 MB.')
+            return back
+        proof_bytes = proof.read()
+    elif needs_count:
+        messages.error(request, 'Please attach the photo of the cash invoice (Cash Proof) before approving.')
+        return back
+    from django.core.files.base import ContentFile
+    name = (request.user.get_full_name() or request.user.username)
+    now = timezone.now()
+    done_new, done_old = [], []
+    for e in targets:
+        h = getattr(e, 'collector', None)
+        if h is None:
+            h = CollectorHandover(shift_entry=e, collector_name=name, cash_counts=dict(e.cash_counts),
+                                  cash_counts_aed=dict(e.cash_counts_aed), notes=note)
+            h.proof_attachment.save(proof.name, ContentFile(proof_bytes), save=False)
+            h.save()
+            e = h.shift_entry
+            total = f'{Decimal(str(h.cash_total)):.3f}'
+            details = f'Approved by the collector ("Approve Handover"): {total} RO, same as the waiter\'s count'
+            if note:
+                details += f'\nNote: "{note}"'
+            log_activity(request, 'handover_saved', description=e.reference_id, details=details + '\nCash proof photo attached')
+            done_new.append(e)
+        else:
+            details = 'Approved by the collector ("Approve Handover"); his own count kept'
+            if note:
+                details += f'\nNote: "{note}"'
+            log_activity(request, 'collector_approved', description=e.reference_id, details=details)
+            done_old.append(e)
+        e.collector_approved = True
+        e.collector_approved_at = now
+        e.collector_approved_by = request.user
+        if note:
+            e.collector_note = note
+        e.save(update_fields=['collector_approved', 'collector_approved_at', 'collector_approved_by', 'collector_note'])
+    refs = ', '.join(e.reference_id for e in done_new + done_old)
+    messages.success(request, f'Approved {len(targets)} shift(s) and saved as collected: {refs}.')
+    return back
+
+
 @role_required('collector', 'audit', 'sales_manager', 'admin')
 def collector_view(request):
     is_viewer = request.user.profile.role == 'sales_manager'   # the Sales Department Manager only looks
     if request.method == 'POST':
         if is_viewer:
             raise PermissionDenied('This account can only view the collector page.')
+        if request.POST.get('action') == 'collector_approve_all':
+            return _collector_approve(request)
         entry_id = request.POST.get('shift_entry_id')
         shift_entry = get_object_or_404(ShiftEntry, id=entry_id)
 
@@ -1048,9 +1112,12 @@ def collector_view(request):
         group['date_group_count'] = date_group + 1
 
     cash_subtotals = _cash_subtotals(entry_denoms, entry_aed_denoms)
+    collector_day = _collector_day_rows(selected_entry) if selected_entry and not selected_entry.is_archived else None
 
     context = {
         **cash_subtotals,
+        'collector_day': collector_day,
+        'can_approve': request.user.profile.role in ('collector', 'admin'),
         'all_entries': all_entries_qs,
         'branch_groups': branch_groups,
         'shift_filter': shift_filter,
@@ -1532,16 +1599,6 @@ def import_branches_view(request):
         messages.error(request, 'Please choose a file.')
         return redirect('add_branch')
 
-    try:
-        return _import_branches_from_upload(request, upload)
-    except Exception as exc:
-        # Never 500 the admin UI — show the real cause and log the traceback.
-        logger.exception('Branch CSV/XLSX import failed')
-        messages.error(request, f'Import failed: {type(exc).__name__}: {exc}')
-        return redirect('add_branch')
-
-
-def _import_branches_from_upload(request, upload):
     filename = (upload.name or '').lower()
     rows = []
 
@@ -1574,8 +1631,6 @@ def _import_branches_from_upload(request, upload):
             rows.append(row)
     else:
         raw_bytes = upload.read()
-        # NUL bytes make Python's csv module raise and 500 the request.
-        raw_bytes = raw_bytes.replace(b'\x00', b'')
         decoded = None
         for encoding in ('utf-8-sig', 'utf-16', 'cp1256', 'cp1252', 'latin-1'):
             try:
@@ -1587,25 +1642,14 @@ def _import_branches_from_upload(request, upload):
             messages.error(request, 'Could not read the file — unrecognized text encoding. Try re-saving it as "CSV UTF-8" from Excel.')
             return redirect('add_branch')
 
-        # Spreadsheet exports sometimes put huge unused cells in a row.
-        csv.field_size_limit(min(10 * 1024 * 1024, sys.maxsize))
-
         try:
-            sample = decoded[:4096]
-            dialect = csv.Sniffer().sniff(sample, delimiters=',\t;') if sample.strip() else csv.excel
+            dialect = csv.Sniffer().sniff(decoded[:2048], delimiters=',\t;')
         except csv.Error:
             dialect = csv.excel  # comma-separated fallback
 
-        try:
-            reader = csv.DictReader(io.StringIO(decoded), dialect=dialect)
-            fieldnames = list(reader.fieldnames or [])
-            rows = list(reader)
-        except csv.Error as exc:
-            messages.error(
-                request,
-                f'Could not parse that CSV ({exc}). Re-save it from Excel as "CSV UTF-8" and try again.'
-            )
-            return redirect('add_branch')
+        reader = csv.DictReader(io.StringIO(decoded), dialect=dialect)
+        fieldnames = reader.fieldnames or []
+        rows = list(reader)
 
     name_col = _find_column(fieldnames, NAME_COLUMN_CANDIDATES)
     code_col = _find_column(fieldnames, CODE_COLUMN_CANDIDATES)
@@ -1631,12 +1675,6 @@ def _import_branches_from_upload(request, upload):
             else:
                 blank += 1
             continue
-        if len(name) > 120:
-            skipped.append((line_no, f'{name[:40]}…', 'name longer than 120 characters'))
-            continue
-        if code and len(code) > 20:
-            skipped.append((line_no, name, f'code "{code}" longer than 20 characters'))
-            continue
         nkey, ckey = _norm_branch_name(name), _norm_branch_code(code)
         if nkey in names:
             skipped.append((line_no, name, f'name already exists ("{names[nkey]}")'))
@@ -1644,13 +1682,7 @@ def _import_branches_from_upload(request, upload):
         if ckey and ckey in codes:
             skipped.append((line_no, name, f'code "{code}" already used by "{codes[ckey]}"'))
             continue
-        try:
-            Branch.objects.create(name=name, code=code or None)
-        except Exception as exc:
-            # Unique constraint or any other DB rejection — skip the row
-            # instead of failing the whole upload.
-            skipped.append((line_no, name, f'could not save ({exc})'))
-            continue
+        Branch.objects.create(name=name, code=code or None)
         names[nkey] = name
         if ckey:
             codes[ckey] = name

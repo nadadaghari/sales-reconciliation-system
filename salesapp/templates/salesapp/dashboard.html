@@ -440,7 +440,7 @@ function toggleAuditGroup(id){
     This branch runs <b>{{ day_status.shifts_per_day }}</b> shift{{ day_status.shifts_per_day|pluralize }} a day (set in Settings).</p>
   <div style="overflow-x:auto;">
   <table style="margin:0;">
-    <thead><tr><th>Shift</th><th>Submit Request No.</th><th>Sales Actual</th><th>Waiter note</th><th>Status</th></tr></thead>
+    <thead><tr><th>Shift</th><th>Submit Request No.</th><th>Sales Actual</th><th>Waiter note</th><th>Collector</th><th>Status</th></tr></thead>
     <tbody>
       {% for r in day_status.rows %}
       <tr>
@@ -448,6 +448,7 @@ function toggleAuditGroup(id){
         <td>{% if r.entry %}<a href="?entry_id={{ r.entry.id }}" style="color:#3B6FE0; text-decoration:none;">{{ r.entry.reference_id }}</a>{% else %}—{% endif %}</td>
         <td>{% if r.entry %}{{ r.entry.sales_actual }} RO{% else %}—{% endif %}</td>
         <td style="max-width:260px; font-size:12px; color:#1F3B4D;">{% if r.entry %}{{ r.entry.notes|default:"—"|truncatechars:80 }}{% if r.entry.notes_files.exists or r.entry.notes_attachment %} <span title="Has Close Till Foodics / attachment">📎</span>{% endif %}{% else %}—{% endif %}</td>
+        <td>{% if r.entry %}{% if r.entry.collector_approved and r.entry.collector %}<span class="badge ok" title="{{ r.entry.collector_note }}">✓ Approved</span>{% else %}<span style="color:#8A8578; font-size:12px;">—</span>{% endif %}{% else %}—{% endif %}</td>
         <td>
           {% if r.state == 'approved' %}<span class="badge ok">Approved</span>
           {% elif r.state == 'waiting' %}<span class="badge flag">Awaiting Sales Review</span>
